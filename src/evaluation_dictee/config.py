@@ -57,6 +57,11 @@ class DataConfig(BaseModel):
     # Grille JSON (versionnée dans configs/) : mot attendu + fautes connues par item.
     grid_path: str = "configs/grille_dictee_2015.json"
     limit: int | None = None  # limiter le nombre de copies (tests rapides)
+    # Choix des `limit` copies : False = les premières par identifiant ; True = tirées au
+    # hasard avec la graine `seed` du run. Le tirage est emboîté : à graine égale, les
+    # 200 copies d'un --limit 200 font partie de celles d'un --limit 300, qui prolonge
+    # donc l'échantillon (et reprend son checkpoint) au lieu d'en tirer un autre.
+    random_sample: bool = False
     # Seuil de densité d'encre en dessous duquel une copie est jugée VIERGE (l'élève
     # n'a rien écrit : seul le pré-imprimé marque ~2%). Ces copies sont codées "0"
     # (absent) sur tous les items, sans appel modèle, identiquement pour toutes les

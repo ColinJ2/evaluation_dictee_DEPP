@@ -37,10 +37,12 @@ class FakeScorer(Scorer):
         delay: float = 0.0,
         fail: set[str] | None = None,
         non_transcribed: set[str] | None = None,
+        transcrire: bool = False,
     ) -> None:
         self.delay = delay
         self.fail = fail or set()
         self.non_transcribed = non_transcribed or set()
+        self.transcrire = transcrire  # renseigne raw_transcription, comme le two_stage
         self.scored: list[str] = []
         self.max_active = 0
         self._active = 0
@@ -62,7 +64,8 @@ class FakeScorer(Scorer):
                 ItemPrediction(item_id=i, code=c, confidence=0.9, transcription="x")
                 for i, c in zip(copy.item_ids, copy.expert_codes, strict=True)
             ]
-            return CopyPrediction(copy_id=copy.copy_id, items=items)
+            raw = f"texte lu sur {copy.copy_id}" if self.transcrire else None
+            return CopyPrediction(copy_id=copy.copy_id, items=items, raw_transcription=raw)
         finally:
             with self._lock:
                 self._active -= 1
@@ -231,6 +234,60 @@ def test_modele_inscrit_dans_chaque_ligne(patched, monkeypatch, tmp_path: Path) 
     assert recs
     assert all(r["model"] == "vlm-etape1" for r in recs)
     assert all(r["model_stage2"] == "llm-etape2" for r in recs)
+
+
+def test_transcriptions_etape1_ecrites_a_part(patched, monkeypatch, tmp_path: Path) -> None:
+    """En two_stage, la transcription de l'étape 1 sort dans un JSON, une entrée par copie."""
+    monkeypatch.setattr(bench, "load_dataset", lambda **_k: _copies(3))
+    monkeypatch.setattr(bench, "load_image", lambda path: path)
+    monkeypatch.setattr(bench, "ink_ratio", lambda path: 0.01 if "c001" in path else 0.5)
+    config = ExperimentConfig.model_validate(
+        {
+            "name": "test_run",
+            "approach": "two_stage",
+            "model": {"name": "vlm-etape1"},
+            "model_stage2": {"name": "llm-etape2", "kind": "llm"},
+            "data": {"images_path": "x", "labels_path": "y"},
+        }
+    )
+
+    bench.run_benchmark(config, FakeScorer(transcrire=True), output_dir=tmp_path, concurrency=2)
+
+    sortie = tmp_path / "test_run_vlm-etape1_llm-etape2_transcriptions.json"
+    # c001 est vierge : codée sans appel modèle, donc sans transcription.
+    assert json.loads(sortie.read_text(encoding="utf-8")) == [
+        {"copy_id": "c000.png", "model": "vlm-etape1", "transcription": "texte lu sur c000.png"},
+        {"copy_id": "c002.png", "model": "vlm-etape1", "transcription": "texte lu sur c002.png"},
+    ]
+
+
+def test_pas_de_fichier_de_transcriptions_en_end_to_end(
+    patched, monkeypatch, tmp_path: Path
+) -> None:
+    """Sans étape 1, aucun fichier de transcriptions vide n'est laissé derrière."""
+    monkeypatch.setattr(bench, "load_dataset", lambda **_k: _copies(2))
+
+    bench.run_benchmark(_config(2), FakeScorer(), output_dir=tmp_path, concurrency=1)
+
+    assert not list(tmp_path.glob("*_transcriptions.json"))
+
+
+def test_ecrire_transcriptions_une_entree_par_copie(tmp_path: Path) -> None:
+    """Dernière occurrence gagnante, valeurs manquantes (None, NaN pandas) ignorées."""
+    sortie = tmp_path / "t.json"
+    records = [
+        {"copy_id": "b.png", "model": "m", "raw_transcription": "ancienne lecture"},
+        {"copy_id": "b.png", "model": "m", "raw_transcription": "nouvelle lecture"},
+        {"copy_id": "a.png", "model": float("nan"), "raw_transcription": "lecture de a"},
+        {"copy_id": "vierge.png", "model": "m", "raw_transcription": None},
+        {"copy_id": "pandas.png", "model": "m", "raw_transcription": float("nan")},
+    ]
+
+    assert bench.ecrire_transcriptions(records, sortie) == 2
+    assert json.loads(sortie.read_text(encoding="utf-8")) == [
+        {"copy_id": "a.png", "model": None, "transcription": "lecture de a"},
+        {"copy_id": "b.png", "model": "m", "transcription": "nouvelle lecture"},
+    ]
 
 
 def test_model_stage2_absent_en_end_to_end(patched, monkeypatch, tmp_path: Path) -> None:

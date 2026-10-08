@@ -504,6 +504,9 @@ uv run scripts/finetune_htr_scoledit.py --config configs/finetune/finetune_REFER
 # ─────────── Suivre un run en cours ───────────
 tail -f logs/<run>.latest.log                    # log du dernier lancement
 cat data/processed/<run>_failed_copies.txt       # copies en échec du dernier passage
+# two_stage : transcription de l'étape 1 dans data/processed/<run>_transcriptions.json,
+# écrite en fin de run ; pour un run antérieur ou interrompu :
+uv run scripts/backfill_transcriptions.py --run-name <run>
 
 # ─────────── Export des prédictions vers S3 ───────────
 uv run scripts/export_predictions.py --run-name dictee_two_stage_gemma4-26b-moe
