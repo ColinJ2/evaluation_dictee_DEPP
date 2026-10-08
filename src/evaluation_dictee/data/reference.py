@@ -1,4 +1,7 @@
-"""Codes de la dictée et simplification 6 codes → 1/9/0 (cible principale, CLAUDE.md §3)."""
+"""Codes de la dictée et simplification 6 codes → 1/9/0 (cible principale).
+
+Voir `.claude/rules/methodologie.md`.
+"""
 
 from __future__ import annotations
 

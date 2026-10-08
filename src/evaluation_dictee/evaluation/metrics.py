@@ -1,4 +1,7 @@
-"""Métriques de scoring : accord brut, kappa de Cohen, matrice de confusion (CLAUDE.md §5)."""
+"""Métriques de scoring : accord brut, kappa de Cohen, matrice de confusion.
+
+Voir `.claude/rules/methodologie.md`.
+"""
 
 from __future__ import annotations
 

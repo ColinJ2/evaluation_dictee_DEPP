@@ -1,4 +1,4 @@
-"""Construction des prompts d'évaluation (décisions méthodologiques CLAUDE.md §3-4).
+"""Construction des prompts d'évaluation (décisions : `.claude/rules/methodologie.md`).
 
 Point critique : les élisions (n', S', l', d', qu') sont des items SÉPARÉS du mot suivant ;
 sans consigne explicite le modèle les recolle et décale tous les items suivants.

@@ -1,4 +1,7 @@
-"""Calibration de la confiance et courbe de renvoi humain (livrable décisionnel, CLAUDE.md §4)."""
+"""Calibration de la confiance et courbe de renvoi humain (livrable décisionnel).
+
+Voir `.claude/rules/methodologie.md`.
+"""
 
 from __future__ import annotations
 

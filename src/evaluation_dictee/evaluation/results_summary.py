@@ -5,7 +5,7 @@ Chaque fonction condense un DataFrame de prédictions (chargé par
 correspondant aux lignes des tableaux comparatifs de `website/resultats.qmd`.
 
 Convention de codage (grille simplifiée) : un code vaut "1" si l'item est
-correct, autre chose sinon (« erreur »). Voir CLAUDE.md §3.
+correct, autre chose sinon (« erreur »). Voir .claude/rules/methodologie.md.
 """
 
 from __future__ import annotations

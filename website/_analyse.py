@@ -86,7 +86,7 @@ def _liste_env(variable: str, defaut: list[str]) -> list[str]:
 
 
 #: Approches comparées, dans l'ordre d'affichage : libellé → champ `name` du YAML.
-#: Ce sont les deux MÉTHODES du projet (CLAUDE.md §4) — end-to-end une passe vs
+#: Ce sont les deux MÉTHODES du projet (.claude/rules/methodologie.md) — end-to-end une passe vs
 #: two-stage HTR+codage — PAS des variantes de prompt. `modeles_exportes()` déduit
 #: automatiquement la liste des modèles depuis S3 en retirant ces deux préfixes ;
 #: y ajouter une approche de plus déduite d'un nom de fichier a déjà provoqué un

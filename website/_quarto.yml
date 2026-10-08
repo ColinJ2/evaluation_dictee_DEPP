@@ -8,7 +8,7 @@ project:
     # écrites de mineurs, et ce site est public — la page n'est donc pas
     # publiée. Elle reste rendable dans l'environnement sécurisé du SSP Cloud
     # en retirant cette ligne. Voir aussi la note « Données sensibles » de
-    # `index.qmd` et le §6 de `CLAUDE.md`.
+    # `index.qmd` et `.claude/rules/donnees.md`.
     - "!ecarts.qmd"
     - "cards/*.qmd"
     - "slides/*.qmd"

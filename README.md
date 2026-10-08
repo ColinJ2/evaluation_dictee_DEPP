@@ -9,12 +9,12 @@ l'opportunité d'assister la correction humaine par l'IA.
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 > **Documentation** — contexte, décisions méthodologiques et conventions :
-> [CLAUDE.md](CLAUDE.md) · [`docs/decisions.md`](docs/decisions.md) ·
+> [CLAUDE.md](.claude/CLAUDE.md) · [`.claude/rules/`](.claude/rules) · [`docs/decisions.md`](docs/decisions.md) ·
 > [site Quarto](https://inseefrlab.github.io/evaluation_dictee/)
 
 
 
-## Ce que fait le projet
+## Le projet en quelques mots
 
 Observer la possibilité et la fiabilité d'un codage automatique des items d'une
 dictée manuscrite, recueillie dans le cadre des évaluations
@@ -444,7 +444,7 @@ uv run pytest -k "chain_of_thought"         # par motif
 
 ### Conventions
 
-Détaillées dans [CLAUDE.md](CLAUDE.md) § 8. L'essentiel :
+Détaillées dans [`.claude/rules/code-conventions.md`](.claude/rules/code-conventions.md). L'essentiel :
 
 - **Python ≥ 3.11**, dépendances gérées avec **uv exclusivement**.
 - Annoter les fonctions publiques ; docstrings **en français**, style Google, court.
@@ -459,9 +459,9 @@ Détaillées dans [CLAUDE.md](CLAUDE.md) § 8. L'essentiel :
 
 ### Par où commencer
 
-Lire [CLAUDE.md](CLAUDE.md), puis suivre le fil de `scripts/run_benchmark.py` : il lit
+Lire [`.claude/CLAUDE.md`](.claude/CLAUDE.md), puis suivre le fil de `scripts/run_benchmark.py` : il lit
 une config, charge les données, appelle un modèle, calcule les métriques. En cas de
-doute sur une décision méthodologique, la réponse est dans CLAUDE.md ou
+doute sur une décision méthodologique, la réponse est dans `.claude/rules/` ou
 [`docs/decisions.md`](docs/decisions.md).
 
 
