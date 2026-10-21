@@ -117,6 +117,20 @@ class PromptConfig(BaseModel):
     # Expérimentation 4 : présente le mot ATTENDU en contraste des fautes connues,
     # plutôt que les fautes seules. Sans effet si show_error_examples est faux.
     contrastive_examples: bool = False
+    # Majuscules : la casse fait partie de l'orthographe (majuscule manquante ou en
+    # trop = erreur, accent facultatif sur une majuscule). Mesuré sur 2021 : l'expert
+    # code 9 dans 90 à 100 % des cas « elle »/« Elle », « Maman »/« maman ». Agit sur
+    # la transcription ET le codage en two_stage.
+    case_rules: bool = False
+    # Ponctuation au bénéfice du doute : un signe visible à l'endroit attendu vaut 1,
+    # sauf s'il est SÛREMENT un autre signe (9) ; l'absence (0) seulement si elle est
+    # sûre. En two_stage, l'étape 1 transcrit aussi tout signe douteux. Prime sur
+    # `check_punctuation_presence`.
+    lenient_punctuation: bool = False
+    # Mots (tout item hors ponctuation) : en cas de doute entre correct et erreur, 9.
+    # Contrepoids de la sur-correction, biais dominant de l'end-to-end (le modèle
+    # lit le mot attendu là où l'élève a fauté). Symétrique de `lenient_punctuation`.
+    doubt_word_is_error: bool = False
 
 
 class ExperimentConfig(BaseModel):

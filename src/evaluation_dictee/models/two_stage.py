@@ -178,7 +178,12 @@ class TwoStageScorer(Scorer):
         messages = cast(
             "list[ChatCompletionMessageParam]",
             attach_image(
-                build_transcription_prompt(read_final_state=self.prompt_config.read_final_state),
+                build_transcription_prompt(
+                    read_final_state=self.prompt_config.read_final_state,
+                    case_rules=self.prompt_config.case_rules,
+                    lenient_punctuation=self.prompt_config.lenient_punctuation,
+                    doubt_word_is_error=self.prompt_config.doubt_word_is_error,
+                ),
                 _image_to_data_url(image),
             ),
         )
@@ -242,6 +247,9 @@ class TwoStageScorer(Scorer):
                 transcription=transcription,
                 items=items_a_coder,
                 scheme=self.scheme,
+                case_rules=self.prompt_config.case_rules,
+                lenient_punctuation=self.prompt_config.lenient_punctuation,
+                doubt_word_is_error=self.prompt_config.doubt_word_is_error,
             ),
         )
         # chain_of_thought=False : le prompt de l'étape 2 ne demande pas de champ

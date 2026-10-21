@@ -325,3 +325,38 @@ de les lire sous leur ancien nom.
 **Limite à garder en tête** : comparer 2015 et 2021 compare deux corpus d'élèves
 différents ; un écart mêle effet du modèle et effet du corpus (niveau, scans à 200 vs
 300 dpi). Comparer deux prompts sur une même année porte sur les mêmes copies.
+
+## D13 — Prompt `majponct` : majuscules et ponctuation au bénéfice du doute
+
+**Décision** (21/10/2026) : trois options de prompt, désactivées par défaut (`base`
+inchangé), activées ensemble sous le nom de prompt `majponct`
+(`configs/scoring/dictee2021_{end2end,two_stage}_majponct.yaml`) :
+
+- `case_rules` : la majuscule fait partie de l'orthographe. Majuscule manquante ou en
+  trop = 9, accent facultatif sur une majuscule (« À » pour « A » = 1). Mesuré sur les
+  prédictions 2021 : l'expert code 9 « elle » pour « Elle » 451 fois sur 464, « Maman »
+  pour « maman » 1 020 fois sur 1 045 ; aucune consigne n'en parlait. Pour « À » / « A »,
+  les codes experts sont partagés (269 × 1, 254 × 9) : la tolérance de l'accent est
+  une hypothèse à confirmer avec la DEPP.
+- `lenient_punctuation` (choix de l'utilisateur) : un signe visible à l'endroit attendu
+  vaut 1 ; 9 seulement si l'on est SÛR que c'est un autre signe ; 0 seulement si l'on est
+  SÛR qu'il n'y a rien. Tout doute (sur la présence ou sur la nature) donne 1. En
+  two_stage, l'étape 1 transcrit aussi tout signe douteux et la casse exacte ; l'étape 2,
+  qui ne voit que le texte, code 1 / 9 / 0 selon le signe transcrit.
+
+- `doubt_word_is_error` (choix de l'utilisateur) : pour tout item hors ponctuation,
+  1 seulement si le mot attendu est lu clairement ; un doute donne 9. En two_stage,
+  l'étape 1 transcrit la lecture fautive quand elle ne peut pas trancher, et l'étape 2
+  code 9 une transcription incertaine. Asymétrie voulue avec la ponctuation : pour les
+  mots, le biais dominant mesuré est la sur-correction (le modèle lit le mot attendu).
+
+**Ce que ça vise** : la sur-détection du two-stage sur la ponctuation (« 69 · , »,
+« 22 · - », « 53 · - »). Le risque symétrique est d'accroître la sur-correction des
+ponctuations absentes, déjà forte en end-to-end : à vérifier sur le site (mode « deux
+prompts »).
+
+**Langfuse** : les templates « Transcription » et « Text coding » n'ont pas de variable
+pour des consignes optionnelles ; les consignes y sont ajoutées au message system après
+compilation (`prompts._ajouter_au_systeme`), sans nouvelle version Langfuse. La trace
+pointe donc la version du template, et la config versionnée dit quelles options étaient
+actives.

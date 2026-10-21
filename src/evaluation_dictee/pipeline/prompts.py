@@ -137,6 +137,111 @@ _CONSIGNE_PONCTUATION = (
     "n'est pas le bon (un point à la place d'une virgule, par exemple).\n"
 )
 
+# Majuscules et ponctuation au bénéfice du doute (prompt `majponct`, 21/10/2026). La casse :
+# sur les prédictions 2021, l'expert code 9 une majuscule manquante (« elle » pour
+# « Elle » : 451 fois sur 464) comme une majuscule en trop (« Maman » pour « maman » :
+# 1 020 sur 1 045), et aucune consigne n'en parlait. La ponctuation : choix de
+# l'utilisateur, une absence (0) ou un mauvais signe (9) n'est compté que s'il est sûr.
+_CONSIGNE_MAJUSCULES = (
+    "14 - MAJUSCULES : la majuscule fait partie de l'orthographe. Compare aussi la "
+    "PREMIÈRE LETTRE en majuscule/minuscule :\n"
+    "   a - si le mot attendu commence par une majuscule (début de phrase, nom propre "
+    "comme « Martine » ou « Papa »), une minuscule à la place est une erreur (9) : "
+    "« elle » pour « Elle » ;\n"
+    "   b - une majuscule écrite là où le mot attendu est en minuscule est aussi une "
+    "erreur (9) : « Maman » pour « maman » au milieu de la phrase ;\n"
+    "   c - l'accent est facultatif sur une majuscule : « À » pour « A » est correct (1). "
+    "Une minuscule reste une erreur, accentuée ou non (« a », « à » pour « A ») ;\n"
+    "   d - chez un enfant, une majuscule se reconnaît à sa FORME et à sa TAILLE par "
+    "rapport aux lettres voisines. Pour les lettres dont les deux formes se ressemblent "
+    "(c, o, s, v, w, x, z, parfois p ou m), juge à la taille.\n"
+)
+
+_CONSIGNE_PONCTUATION_TOLERANTE = (
+    "15 - PONCTUATION, AU BÉNÉFICE DU DOUTE (cette règle prime sur la grille pour les "
+    "items ponctuation) : regarde l'endroit précis de la copie où le signe est attendu.\n"
+    "   a - Si un signe de ponctuation y figure, ou une marque qui peut en être un "
+    "(point, virgule, trait, même petit, mal formé ou peu lisible), code 1 ;\n"
+    "   b - code 9 (erreur) UNIQUEMENT si un signe est écrit et que tu es SÛR que ce "
+    "n'est pas le signe attendu (un point d'interrogation net à la place d'un point, "
+    "par exemple). Si tu hésites sur la nature du signe, code 1 ;\n"
+    "   c - code 0 (absent) UNIQUEMENT si tu es SÛR qu'aucun signe n'est écrit à cet "
+    "endroit. Si tu hésites sur sa présence, code 1.\n"
+    "   Le tiret de dialogue (« - ») s'écrit en début de ligne, souvent après un retour "
+    "à la ligne : cherche-le là.\n"
+)
+
+_CONSIGNE_DOUTE_MOTS = (
+    "16 - MOTS, EN CAS DE DOUTE : pour tout item qui n'est PAS une ponctuation, code 1 "
+    "SEULEMENT si tu lis clairement le mot attendu, lettre à lettre, accents et "
+    "majuscule compris. Si tu hésites entre correct et erreur (lettre mal formée, accent "
+    "incertain, terminaison peu lisible, majuscule ou minuscule incertaine), code 9. Ne "
+    "laisse jamais le texte de référence trancher le doute à ta place.\n"
+)
+
+# Mêmes règles, formulées pour l'étape 2 du two_stage, qui ne voit que le texte.
+_CONSIGNE_MAJUSCULES_TEXTE = (
+    "5 - MAJUSCULES : la majuscule fait partie de l'orthographe. Une minuscule là où le "
+    "mot attendu a une majuscule (« elle » pour « Elle ») est une erreur (9), une "
+    "majuscule en trop (« Maman » pour « maman ») aussi. L'accent est facultatif sur "
+    "une majuscule : « À » pour « A » est correct (1).\n"
+)
+
+_CONSIGNE_PONCTUATION_TOLERANTE_TEXTE = (
+    "6 - PONCTUATION (cette règle prime sur la grille pour les items ponctuation) : si "
+    "le signe attendu figure dans la transcription à cet endroit, code 1 ; si un AUTRE "
+    "signe y figure à sa place, code 9 ; s'il n'y a aucun signe à cet endroit, code 0 "
+    "(absent).\n"
+)
+
+# Étape 1 du two_stage : la transcription doit conserver la casse et ne perdre aucun
+# signe, sinon l'étape 2 n'a aucun moyen d'appliquer les deux règles ci-dessus.
+_CONSIGNE_DOUTE_MOTS_TEXTE = (
+    "7 - MOTS, EN CAS DE DOUTE : pour tout item qui n'est PAS une ponctuation, code 1 "
+    "seulement si la transcription donne exactement le mot attendu. Si elle est "
+    "incertaine ou incomplète à cet endroit (lettre manquante, caractère illisible), "
+    "code 9.\n"
+)
+
+_CONSIGNE_DOUTE_MOTS_TRANSCRIPTION = (
+    "7 - MOTS, EN CAS DE DOUTE : quand une lettre ou un accent d'un mot est incertain, ne "
+    "choisis pas l'orthographe correcte par défaut. Transcris ce que tu vois ; si tu ne "
+    "peux pas trancher entre deux lectures, transcris celle qui s'écarte de "
+    "l'orthographe correcte.\n"
+)
+
+_CONSIGNE_MAJUSCULES_TRANSCRIPTION = (
+    "5 - Respecte EXACTEMENT les majuscules et les minuscules de l'élève : n'ajoute pas "
+    "de majuscule en début de phrase ou à un nom propre si l'élève ne l'a pas écrite, "
+    "n'en retire pas s'il en a écrit une. Ne mets un accent sur une majuscule que s'il "
+    "est écrit.\n"
+)
+
+_CONSIGNE_PONCTUATION_TRANSCRIPTION = (
+    "6 - PONCTUATION : transcris TOUT signe de ponctuation visible, même petit, mal formé "
+    "ou douteux : une marque qui peut être un point, une virgule ou un tiret se "
+    "transcrit. N'omets un signe que si tu es SÛR qu'il n'y a rien. Le tiret de "
+    "dialogue (« - ») en début de ligne est un signe : transcris-le.\n"
+)
+
+
+def _ajouter_au_systeme(messages: list[ChatMessageDict], blocs: list[str]) -> list[ChatMessageDict]:
+    """Ajoute des consignes à la fin du message system.
+
+    Les templates « Transcription » et « Text coding » versionnés dans Langfuse n'ont
+    pas de variable pour des consignes optionnelles : les ajouter après compilation
+    les applique quelle que soit la version servie, sans modifier Langfuse.
+    """
+    if not blocs:
+        return messages
+    out = [dict(m) for m in messages]
+    for message in out:
+        if message["role"] == "system":
+            message["content"] = str(message["content"]).rstrip() + "\n\n" + "\n".join(blocs)
+            break
+    return cast("list[ChatMessageDict]", out)
+
+
 _CONSIGNE_COMPTAGE = (
     "9 - COMMENCE PAR COMPTER. Avant de coder quoi que ce soit, parcours l'image et "
     "compte combien d'items l'élève a RÉELLEMENT écrits : chaque mot écrit compte pour "
@@ -561,8 +666,14 @@ def build_dictation_prompt(
         blocs.append(_CONSIGNE_VOISINAGE)
     if config.show_error_examples:
         blocs.append(_CONSIGNE_EXEMPLES)
-    if config.check_punctuation_presence:
+    if config.check_punctuation_presence and not config.lenient_punctuation:
         blocs.append(_CONSIGNE_PONCTUATION)
+    if config.case_rules:
+        blocs.append(_CONSIGNE_MAJUSCULES)
+    if config.lenient_punctuation:
+        blocs.append(_CONSIGNE_PONCTUATION_TOLERANTE)
+    if config.doubt_word_is_error:
+        blocs.append(_CONSIGNE_DOUTE_MOTS)
     consignes_optionnelles = ("\n\n" + "\n\n".join(blocs)) if blocs else ""
 
     consigne_cot = ("\n\n" + _CONSIGNE_COT) if config.chain_of_thought else ""
@@ -595,21 +706,37 @@ def build_dictation_prompt(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def build_transcription_prompt(read_final_state: bool = True) -> list[ChatMessageDict]:
+def build_transcription_prompt(
+    read_final_state: bool = True,
+    case_rules: bool = False,
+    lenient_punctuation: bool = False,
+    doubt_word_is_error: bool = False,
+) -> list[ChatMessageDict]:
     """Prompt ÉTAPE 1 (HTR) : transcrire l'image sans coder ni voir la référence (non biaisé).
 
     Args:
         read_final_state: si True, ajoute la consigne de ne lire que l'état final (ratures).
+        case_rules: si True, impose de conserver la casse exacte de l'élève.
+        lenient_punctuation: si True, impose de transcrire tout signe douteux.
+        doubt_word_is_error: si True, un doute sur un mot se transcrit vers la faute.
 
     Returns:
         Les messages du prompt de transcription compilés.
     """
     consigne_ratures = ("\n" + _CONSIGNE_RATURES_TRANSCRIPTION) if read_final_state else ""
-    return _compile_prompt(
+    messages = _compile_prompt(
         PROMPT_TRANSCRIPTION,
         fallback=_TEMPLATE_TRANSCRIPTION,
         variables={"consigne_ratures": consigne_ratures},
     )
+    blocs = []
+    if case_rules:
+        blocs.append(_CONSIGNE_MAJUSCULES_TRANSCRIPTION)
+    if lenient_punctuation:
+        blocs.append(_CONSIGNE_PONCTUATION_TRANSCRIPTION)
+    if doubt_word_is_error:
+        blocs.append(_CONSIGNE_DOUTE_MOTS_TRANSCRIPTION)
+    return _ajouter_au_systeme(messages, blocs)
 
 
 def build_text_coding_prompt(
@@ -617,6 +744,9 @@ def build_text_coding_prompt(
     transcription: str,
     items: list[GridItem],
     scheme: str = "simplifiee",
+    case_rules: bool = False,
+    lenient_punctuation: bool = False,
+    doubt_word_is_error: bool = False,
 ) -> list[ChatMessageDict]:
     """Prompt ÉTAPE 2 : coder à partir du texte transcrit (sans image, modèle texte seul).
 
@@ -625,12 +755,22 @@ def build_text_coding_prompt(
         transcription: transcription de la copie produite à l'étape 1.
         items: items de la grille à coder.
         scheme: schéma de grille, "complete" ou "simplifiee" (défaut).
+        case_rules: si True, ajoute la règle des majuscules.
+        lenient_punctuation: si True, ajoute la règle de ponctuation tolérante.
+        doubt_word_is_error: si True, une transcription incertaine d'un mot vaut 9.
 
     Returns:
         Les messages du prompt de codage textuel compilés.
     """
     grille = _GRILLE_COMPLETE if scheme == "complete" else _GRILLE_SIMPLIFIEE
-    return _compile_prompt(
+    blocs = []
+    if case_rules:
+        blocs.append(_CONSIGNE_MAJUSCULES_TEXTE)
+    if lenient_punctuation:
+        blocs.append(_CONSIGNE_PONCTUATION_TOLERANTE_TEXTE)
+    if doubt_word_is_error:
+        blocs.append(_CONSIGNE_DOUTE_MOTS_TEXTE)
+    messages = _compile_prompt(
         PROMPT_TEXT_CODING,
         fallback=_TEMPLATE_TEXT_CODING,
         variables={
@@ -641,3 +781,4 @@ def build_text_coding_prompt(
             "n_items": len(items),
         },
     )
+    return _ajouter_au_systeme(messages, blocs)
