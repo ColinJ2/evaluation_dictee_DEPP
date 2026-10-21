@@ -131,10 +131,18 @@ def kappa_interval(
     if p_e >= 1.0:
         return ConfidenceInterval(estimate=kappa, lower=kappa, upper=kappa, level=level)
 
+    # Fleiss, Cohen & Everitt (1969) :
+    #   Var = [ Σ_i p_ii (1 − (p_i. + p_.i)(1 − κ))²
+    #         + (1 − κ)² Σ_{i≠j} p_ij (p_.i + p_j.)²
+    #         − (κ − p_e (1 − κ))² ] / [ n (1 − p_e)² ]
+    # avec p_i. la marge de l'expert (ligne) et p_.i celle du modèle (colonne).
     somme_marges = marge_pred + marge_true  # (p_.i + p_i.) indexé par catégorie
-    terme_diag = np.diag(joint) * (1 - somme_marges * (1 - kappa))
-    carres = joint * (marge_pred[np.newaxis, :] + marge_true[:, np.newaxis]) ** 2
-    terme_hors_diag = (1 - kappa) ** 2 * (carres.sum() - np.trace(joint * somme_marges**2))
+    terme_diag = np.diag(joint) * (1 - somme_marges * (1 - kappa)) ** 2
+    # Case (i, j) : p_.i (marge modèle de la catégorie de LIGNE) + p_j. (marge
+    # expert de la catégorie de COLONNE) — indices croisés, piège classique.
+    croisees = marge_pred[:, np.newaxis] + marge_true[np.newaxis, :]
+    hors_diag = joint * croisees**2
+    terme_hors_diag = (1 - kappa) ** 2 * (hors_diag.sum() - np.trace(hors_diag))
     variance = (terme_diag.sum() + terme_hors_diag - (kappa - p_e * (1 - kappa)) ** 2) / (
         n * (1 - p_e) ** 2
     )

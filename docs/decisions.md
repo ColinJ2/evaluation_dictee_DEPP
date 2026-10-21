@@ -291,3 +291,37 @@ confiance avant que la courbe de renvoi humain ne soit à nouveau produite. La p
 plus alignée avec le schéma actuel : `logprobs=True` sur l'appel API, probabilité du
 token de code effectivement choisi — `model.request_logprobs` existe déjà dans la
 config mais n'est câblé nulle part (vérifié le 18/09/2026).
+
+---
+
+## D12 — Année et prompt dans le nom des runs ; le site compare années et prompts
+
+**Décision** (21/10/2026) : tout run de scoring publié sur le site se nomme
+`dictee<AAAA>_<end2end|two_stage>_<prompt>_<modele>` (`src/evaluation_dictee/run_names.py`).
+Le prompt est un identifiant court sans tiret bas ; `base` désigne le prompt par
+défaut de chaque approche (celui de `dictee_end2end.yaml` / `dictee_two_stage.yaml`,
+appelé « référence » dans `rapport_bras.py`). L'export vers le site exige `--prompt`
+et vérifie qu'il figure dans le nom (`scripts/export_predictions.py`, et le lanceur).
+
+**Ce que ça change sur le site** : il lit `s3://projet-production-ecrits-depp/prediction_depp/`.
+La page Résultats choisit un modèle et un mode — **années** comparées à prompt commun
+(2015 vs 2021), ou **deux prompts** sur une même année — et chaque vue décline les deux
+configurations sur les deux approches, soit jusqu'à quatre séries. La zone « deux
+modèles » compare à année et prompt fixés. La page Publications DEPP reste sur 2015 · base.
+
+**Ce que ça remplace** : la promotion manuelle `MODELES_PROMUS` (D10) et la découverte
+des modèles par préfixe. Avec l'année et le prompt explicites dans le nom, plus rien
+n'est deviné : un nom non conforme (anciens runs, bras d'expérience) est ignoré et
+signalé en fin de page, jamais lu comme un modèle fantôme (le bug de D9 devient
+impossible par construction).
+
+**Ce qui ne change pas** : D9 — seuls les runs sur **corpus complet** alimentent le
+site ; les bras sur échantillon restent dans `experimentations/` et se comparent avec
+`rapport_bras.py`. Les fichiers 2015 et 2021 existants ont été COPIÉS sous le nouveau
+nom dans `prediction_depp/` (`scripts/renommer_predictions.py`, une copie par
+fichier) ; les originaux de `predictions/` sont intacts et `rapport_bras.py` continue
+de les lire sous leur ancien nom.
+
+**Limite à garder en tête** : comparer 2015 et 2021 compare deux corpus d'élèves
+différents ; un écart mêle effet du modèle et effet du corpus (niveau, scans à 200 vs
+300 dpi). Comparer deux prompts sur une même année porte sur les mêmes copies.

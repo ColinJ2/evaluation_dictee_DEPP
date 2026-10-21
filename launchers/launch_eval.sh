@@ -41,6 +41,7 @@ DO_EXPORT=1
 EXPORT_EXPLICIT=0
 FORCE_EXPORT=0
 DEST_PREFIX=""
+PROMPT=""              # nom du prompt, obligatoire si export (cf. run_names.py)
 SKIP_CHECKS=0
 FOREGROUND=0
 MODE="launch"          # launch | status | stop | chain
@@ -83,15 +84,18 @@ OPTIONS DE LANCEMENT
   --no-export              Ne pas exporter vers S3 à la fin.
   --export                 Forcer l'export même avec --limit.
   --dest-prefix S3URI      Destination de l'export.   [défaut : $S3_PREDICTIONS_PREFIX]
+  --prompt NOM             Nom du prompt du run (ex. base). OBLIGATOIRE dès que le run
+                           est exporté : il doit figurer dans le nom du run
+                           (dictee<AAAA>_<approche>_<prompt>), vérifié AVANT le lancement.
   --force-export           Exporter même si le fichier local est plus petit que le
                            fichier déjà présent sur S3 (garde-fou anti-écrasement).
   --skip-checks            Sauter les appels de vérification (modèle, S3). Déconseillé.
   --foreground             Exécuter la chaîne dans le terminal (débogage, CI).
 
 EXEMPLES
-  launchers/launch_eval.sh
-  launchers/launch_eval.sh --config configs/scoring/dictee_two_stage.yaml
-  launchers/launch_eval.sh --model-name gemma4-26b-moe
+  launchers/launch_eval.sh --prompt base
+  launchers/launch_eval.sh --config configs/scoring/dictee_two_stage.yaml --prompt base
+  launchers/launch_eval.sh --model-name gemma4-26b-moe --prompt base
   launchers/launch_eval.sh --limit 5 --skip-checks        # fumée, 5 copies
   launchers/launch_eval.sh --status
   launchers/launch_eval.sh --stop
@@ -115,6 +119,7 @@ while [[ $# -gt 0 ]]; do
     --no-export)         DO_EXPORT=0; EXPORT_EXPLICIT=1; shift ;;
     --export)            DO_EXPORT=1; EXPORT_EXPLICIT=1; shift ;;
     --dest-prefix)       DEST_PREFIX="$2"; shift 2 ;;
+    --prompt)            PROMPT="$2"; shift 2 ;;
     --force-export)      FORCE_EXPORT=1; shift ;;
     --skip-checks)       SKIP_CHECKS=1; shift ;;
     --foreground)        FOREGROUND=1; shift ;;
@@ -166,6 +171,22 @@ PY
   done <<<"$out"
   [[ -n $RUN_NAME ]] || die "Impossible de résoudre le nom du run depuis $CONFIG"
   set_paths
+}
+
+# Un run exporté alimente le site, qui le classe par année, approche et prompt lus
+# dans son nom : le prompt doit donc être déclaré (--prompt) et figurer dans le nom.
+# Vérifié AVANT le lancement, pour ne pas découvrir l'erreur après ~30 h de run.
+check_prompt() {
+  (( DO_EXPORT == 1 )) || return 0
+  [[ -n $PROMPT ]] || die "--prompt est obligatoire quand le run est exporté (ex. --prompt base), ou passer --no-export."
+  local out
+  if ! out=$(uv run python -c 'import sys
+from evaluation_dictee.run_names import verifier_prompt
+verifier_prompt(sys.argv[1], sys.argv[2])' "$RUN_NAME" "$PROMPT" 2>&1); then
+    printf '%s\n' "$out" | tail -1 >&2
+    die "Nom du run incompatible avec --prompt ${PROMPT}."
+  fi
+  ok "Prompt « ${PROMPT} » présent dans le nom du run (${RUN_NAME})"
 }
 
 set_paths() {
@@ -336,6 +357,7 @@ PY
 # ── Lancement ─────────────────────────────────────────────────────────────────
 launch() {
   probe_config
+  check_prompt
   preflight
 
   STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -349,6 +371,7 @@ launch() {
   if [[ -n $MODEL_STAGE2_NAME ]]; then worker+=( --model-stage2-name "$MODEL_STAGE2_NAME" ); fi
   if [[ -n $LIMIT_CLI ]];         then worker+=( --limit "$LIMIT_CLI" ); fi
   if [[ -n $DEST_PREFIX ]];       then worker+=( --dest-prefix "$DEST_PREFIX" ); fi
+  if [[ -n $PROMPT ]];            then worker+=( --prompt "$PROMPT" ); fi
   if (( DO_EXPORT == 0 ));        then worker+=( --no-export ); fi
   if (( FORCE_EXPORT == 1 ));     then worker+=( --force-export ); fi
 
@@ -500,14 +523,14 @@ chain() {
   if (( DO_EXPORT == 0 )); then
     echo "#EXPORT skipped=--no-export"
     echo "Export S3 non demandé. Pour l'exporter plus tard :"
-    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation"
+    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>}"
     return 0
   fi
   if (( last_rc != 0 )); then
     echo "#EXPORT skipped=run_incomplet rc=${last_rc}"
     echo "Le run s'est terminé en erreur : pas d'export automatique (un JSONL"
     echo "incomplet écraserait un export S3 plus complet). Après diagnostic :"
-    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation"
+    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>}"
     return 0
   fi
 
@@ -551,7 +574,7 @@ PY
   elif (( grc != 0 )); then
     echo "#EXPORT skipped=verification_impossible rc=${grc}"
     echo "Accès S3 non vérifiable : export manuel après diagnostic —"
-    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation"
+    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>}"
     return 0
   fi
 
@@ -561,7 +584,8 @@ PY
   # probe_config plus haut) ; le seul cas contraire est --limit + --export forcé par
   # un humain qui sait ce qu'il fait — pour lui aussi, la destination reste
   # `predictions/`, comportement inchangé depuis avant l'introduction du sous-dossier.
-  local -a export_cmd=( uv run scripts/export_predictions.py --run-name "$RUN_NAME" --no-experimentation )
+  local -a export_cmd=( uv run scripts/export_predictions.py --run-name "$RUN_NAME" --no-experimentation
+                        --prompt "$PROMPT" )
   if [[ -n $DEST_PREFIX ]]; then export_cmd+=( --dest-prefix "$DEST_PREFIX" ); fi
   echo "commande : ${export_cmd[*]}"
   if "${export_cmd[@]}"; then

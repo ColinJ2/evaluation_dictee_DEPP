@@ -69,10 +69,10 @@ Cloud :
 from evaluation_dictee.evaluation.visual_diff import report_single_copy
 
 report_single_copy(
-    copy_id="dictee_2015_0042.png",
+    copy_id="<identifiant de la copie>",
     predictions_df=predictions,        # load_predictions(<run>_predictions.jsonl)
     grid_items=grille.items,
-    images_dir="s3://projet-production-ecrits-depp/dictee_2015/",
+    images_dir="s3://projet-production-ecrits-depp/dictee_2021/",
     expert_labels=labels,
     output_path="data/processed/diagnostic_copie.html",
 )

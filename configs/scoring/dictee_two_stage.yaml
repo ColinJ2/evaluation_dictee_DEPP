@@ -7,13 +7,16 @@
 #  chaque paramètre (les champs omis reprennent leur valeur par défaut).
 #
 #  Lancer : uv run scripts/run_benchmark.py --config configs/scoring/dictee_two_stage.yaml
-#  Sortie  : data/processed/dictee_two_stage_<modele>_predictions.jsonl
+#  Sortie  : data/processed/dictee2015_two_stage_base_<modele>_predictions.jsonl
 #            (approach="two_stage" ; suffixe = modèle étape 1, + modèle étape 2 s'il diffère)
-#            data/processed/dictee_two_stage_<modele>_transcriptions.json
+#            data/processed/dictee2015_two_stage_base_<modele>_transcriptions.json
 #            (transcription de l'étape 1, une entrée par copie, écrite en fin de run)
 # ═══════════════════════════════════════════════════════════════════════════
 
-name: dictee_two_stage
+#  Nom : dictee<année>_<approche>_<prompt> (convention de `run_names.py`) — le
+#  site Quarto en déduit année, approche et prompt. Changer de prompt = changer
+#  le segment <prompt> (sans tiret bas), sinon le site confondrait les deux runs.
+name: dictee2015_two_stage_base
 seed: 42
 concurrency: 12
 

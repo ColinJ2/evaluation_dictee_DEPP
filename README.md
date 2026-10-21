@@ -255,12 +255,12 @@ donc le site que s'il a été mené sur le corpus complet**, peu importe qu'il s
 par `launchers/launch_eval.sh` ou par `run_benchmark.py` directement : c'est la taille
 du run qui compte, pas la façon dont il a été lancé.
 
-**Publier un bras comme approche du site** (le montrer à côté d'end-to-end / two-stage,
-pour un modèle donné) est en revanche **manuel**, pas automatique : ajouter une ligne
-dans `MODELES_PROMUS` (`website/_analyse.py`), après avoir vérifié que le run complet
-est bien exporté à la racine de `predictions/`. Manuel à dessein — le meilleur prompt
-diffère selon le modèle (décision D10), rien à déduire d'un nom de fichier. Détails et
-exemple : `docs/decisions.md` (D10) et le docstring de `MODELES_PROMUS`.
+**Publier un prompt sur le site** (le comparer aux autres dans les menus) : lancer le
+run sur le **corpus complet** avec un `name` de config qui suit la convention
+`dictee<AAAA>_<approche>_<prompt>` (ex. `dictee2015_end2end_exemples`), puis l'exporter
+avec `--prompt exemples --dest-prefix s3://projet-production-ecrits-depp/prediction_depp`.
+Le site lit année, approche, prompt et modèle dans le nom du fichier : rien à coder.
+Détails : `docs/decisions.md` (D12) et `src/evaluation_dictee/run_names.py`.
 
 > **Ce qui doit survivre**, ce sont les chiffres, pas le HTML : ils sont enregistrés à
 > chaque run dans Langfuse. Le rapport, lui, se régénère en une commande.

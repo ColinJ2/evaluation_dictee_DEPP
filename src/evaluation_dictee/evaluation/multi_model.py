@@ -216,6 +216,115 @@ def disagreement_type_summary(df_agree: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).set_index("n_accord_modeles")
 
 
+def pairwise_agreement(df_multi: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Accord brut et kappa de Cohen entre chaque paire de runs.
+
+    Args:
+        df_multi: DataFrame multi-runs (colonnes `y_pred__<run>`).
+
+    Returns:
+        Le couple (accord brut, kappa) : deux matrices carrées indexées par run,
+        de diagonale 1. Kappa NaN quand deux runs n'emploient qu'un même code.
+    """
+    runs = [c.removeprefix("y_pred__") for c in df_multi.columns if c.startswith("y_pred__")]
+    accord = pd.DataFrame(1.0, index=runs, columns=runs)
+    kappa = pd.DataFrame(1.0, index=runs, columns=runs)
+    for i, a in enumerate(runs):
+        for b in runs[i + 1 :]:
+            pa, pb = df_multi[f"y_pred__{a}"], df_multi[f"y_pred__{b}"]
+            accord.loc[a, b] = accord.loc[b, a] = float((pa == pb).mean())
+            kappa.loc[a, b] = kappa.loc[b, a] = _cohen_kappa(pa, pb)
+    return accord, kappa
+
+
+def _cohen_kappa(a: pd.Series, b: pd.Series) -> float:
+    """Kappa de Cohen entre deux séries de codes (NaN si l'accord du hasard vaut 1)."""
+    p_o = float((a == b).mean())
+    marges_a = a.value_counts(normalize=True)
+    marges_b = b.value_counts(normalize=True)
+    p_e = float(marges_a.mul(marges_b, fill_value=0).sum())
+    return (p_o - p_e) / (1 - p_e) if p_e < 1 else float("nan")
+
+
+def fleiss_kappa(df_multi: pd.DataFrame) -> float:
+    """Kappa de Fleiss entre tous les runs : accord inter-runs corrigé du hasard.
+
+    Généralise le kappa de Cohen à plus de deux codeurs : chaque item est codé
+    par les N runs, l'accord observé est la part moyenne de paires de runs
+    d'accord, l'accord du hasard découle des proportions globales de chaque code.
+
+    Args:
+        df_multi: DataFrame multi-runs (colonnes `y_pred__<run>`, au moins deux).
+
+    Returns:
+        Le kappa de Fleiss, NaN si un seul code est employé partout.
+    """
+    pred_cols = [c for c in df_multi.columns if c.startswith("y_pred__")]
+    n_runs = len(pred_cols)
+    if n_runs < 2 or df_multi.empty:
+        return float("nan")
+    preds = df_multi[pred_cols].astype(str)
+    # comptes[i, k] : nombre de runs attribuant le code k à l'item i.
+    comptes = pd.concat(
+        [(preds == code).sum(axis=1) for code in pd.unique(preds.to_numpy().ravel())], axis=1
+    ).to_numpy(dtype=float)
+    p_o = float(((comptes * (comptes - 1)).sum(axis=1) / (n_runs * (n_runs - 1))).mean())
+    p_e = float(((comptes.sum(axis=0) / comptes.sum()) ** 2).sum())
+    return (p_o - p_e) / (1 - p_e) if p_e < 1 else float("nan")
+
+
+def consensus_levels(df_agree: pd.DataFrame) -> pd.DataFrame:
+    """Accord avec l'expert selon le nombre de runs d'accord entre eux.
+
+    Contrairement à `disagreement_type_summary`, distingue l'égalité (deux codes
+    à égalité de voix, 2 contre 2 par exemple), où le code majoritaire n'existe
+    pas, et donne l'accord de CHAQUE run avec l'expert à chaque niveau : qui a
+    raison quand les runs divergent.
+
+    Args:
+        df_agree: DataFrame issu de `agreement_per_item`.
+
+    Returns:
+        Un DataFrame d'une ligne par niveau observé, du plus consensuel au moins
+        consensuel : `n_accord_modeles`, `egalite`, `n_items`, `pct_items`,
+        `accord_majoritaire` (NaN en cas d'égalité) et une colonne
+        `accord__<run>` par run (accords en proportion).
+    """
+    pred_cols = [c for c in df_agree.columns if c.startswith("y_pred__")]
+    preds = df_agree[pred_cols].to_numpy(dtype=object)
+    # Effectif du second code le plus voté : égalité s'il vaut celui du premier.
+    effectifs = np.column_stack(
+        [(preds == preds[:, [i]]).sum(axis=1) for i in range(len(pred_cols))]
+    )
+    effectifs_seconds = np.where(
+        preds == df_agree["modal_pred"].to_numpy(dtype=object)[:, None], 0, effectifs
+    ).max(axis=1)
+    egalite = effectifs_seconds == df_agree["n_accord_modeles"].to_numpy()
+    n_total = len(df_agree)
+    rows = []
+    for n_acc in sorted(df_agree["n_accord_modeles"].unique(), reverse=True):
+        for est_egalite in (False, True):
+            masque = (df_agree["n_accord_modeles"] == n_acc).to_numpy() & (egalite == est_egalite)
+            if not masque.any():
+                continue
+            sub = df_agree[masque]
+            ligne = {
+                "n_accord_modeles": int(n_acc),
+                "egalite": est_egalite,
+                "n_items": len(sub),
+                "pct_items": len(sub) / n_total * 100,
+                "accord_majoritaire": float("nan")
+                if est_egalite
+                else float((sub["modal_pred"] == sub["y_true"]).mean()),
+            }
+            for c in pred_cols:
+                ligne[f"accord__{c.removeprefix('y_pred__')}"] = float(
+                    (sub[c] == sub["y_true"]).mean()
+                )
+            rows.append(ligne)
+    return pd.DataFrame(rows)
+
+
 def _wilson_ci(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     """Intervalle de Wilson (pourcentages). Utilisé pour l'accord retenu.
 

@@ -61,7 +61,7 @@ jobs:
       FSSPEC_S3_ENDPOINT_URL: https://${{ vars.AWS_S3_ENDPOINT || 'minio.lab.sspcloud.fr' }}
       # ── Paramètres des pages de résultats (cf. website/_analyse.py) ─────
       # Valeur explicite : une variable vide écraserait le défaut du module.
-      S3_PREDICTIONS_PREFIX: ${{ vars.S3_PREDICTIONS_PREFIX || 's3://projet-production-ecrits-depp/predictions' }}
+      S3_PREDICTIONS_PREFIX: ${{ vars.S3_PREDICTIONS_PREFIX || 's3://projet-production-ecrits-depp/prediction_depp' }}
     steps:
       - uses: actions/checkout@v4
 

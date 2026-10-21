@@ -6,10 +6,13 @@
 #  chaque paramètre (les champs omis reprennent leur valeur par défaut).
 #
 #  Lancer : uv run scripts/run_benchmark.py --config configs/scoring/dictee_end2end.yaml
-#  Sortie  : data/processed/dictee_end2end_<modele>_predictions.jsonl  (approach="end_to_end")
+#  Sortie  : data/processed/dictee2015_end2end_base_<modele>_predictions.jsonl  (approach="end_to_end")
 # ═══════════════════════════════════════════════════════════════════════════
 
-name: dictee_end2end
+#  Nom : dictee<année>_<approche>_<prompt> (convention de `run_names.py`) — le
+#  site Quarto en déduit année, approche et prompt. Changer de prompt = changer
+#  le segment <prompt> (sans tiret bas), sinon le site confondrait les deux runs.
+name: dictee2015_end2end_base
 seed: 42
 concurrency: 12
 

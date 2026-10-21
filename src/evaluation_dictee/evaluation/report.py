@@ -12,10 +12,11 @@ from pathlib import Path
 
 import fsspec
 import pandas as pd
-from sklearn.metrics import cohen_kappa_score, confusion_matrix
+from scipy.stats import norm
+from sklearn.metrics import confusion_matrix
 
 from evaluation_dictee.data import reference
-from evaluation_dictee.evaluation.statistics import wilson_interval
+from evaluation_dictee.evaluation.statistics import kappa_interval, wilson_interval
 
 
 def load_predictions(predictions_path: str | Path) -> pd.DataFrame:
@@ -119,10 +120,14 @@ def per_item_metrics(df: pd.DataFrame, level: float = 0.95) -> pd.DataFrame:
         level: niveau de confiance des intervalles de Wilson.
 
     Returns:
-        Un DataFrame indexé par item_id : accord et son IC, kappa, prévalence
-        d'erreur experte et modèle avec IC, rappel/précision sur l'erreur, et
-        comptes de sur-correction et de sur-détection.
+        Un DataFrame indexé par item_id : accord et son IC, kappa et son IC, prévalence
+        d'erreur experte et modèle avec IC, rappel/précision sur l'erreur, comptes
+        de sur-correction et de sur-détection, leurs taux avec IC de Wilson
+        (`taux_sur_correction` parmi les fautes de l'expert, `taux_sur_detection`
+        parmi les items qu'il juge corrects), et le `biais_net` : prévalence
+        d'erreur du modèle moins celle de l'expert, avec IC apparié.
     """
+    z = float(norm.ppf(0.5 + level / 2))
     rows = []
     for item_id, grp in df.groupby("item_id"):
         y_true = grp["y_true"]
@@ -131,10 +136,15 @@ def per_item_metrics(df: pd.DataFrame, level: float = 0.95) -> pd.DataFrame:
         n_accord = int((y_true == y_pred).sum())
         ci = wilson_interval(n_accord, n, level)
 
+        # IC asymptotique de Fleiss, SANS correction de grappes : pour un item
+        # donné, chaque copie (donc chaque élève) ne contribue qu'une observation.
+        # Kappa NaN quand une seule catégorie est observée (item que tous réussissent
+        # et que le modèle valide partout) : l'accord du hasard vaut alors 1.
         try:
-            kappa = float(cohen_kappa_score(y_true, y_pred))
+            ci_kappa = kappa_interval(y_true.to_numpy(), y_pred.to_numpy(), level)
+            kappa, kappa_lo, kappa_hi = ci_kappa.estimate, ci_kappa.lower, ci_kappa.upper
         except ValueError:
-            kappa = float("nan")
+            kappa = kappa_lo = kappa_hi = float("nan")
 
         exp_err = y_true != "1"
         mod_err = y_pred != "1"
@@ -146,6 +156,29 @@ def per_item_metrics(df: pd.DataFrame, level: float = 0.95) -> pd.DataFrame:
 
         ci_exp = wilson_interval(n_exp_err, n, level)
         ci_mod = wilson_interval(n_mod_err, n, level)
+        # Taux rapportés à leur population (définitions de la page Évaluation) :
+        # sur-correction parmi les fautes de l'expert, sur-détection parmi les
+        # items qu'il juge corrects. NaN si la population est vide.
+        taux = {}
+        for nom, k, effectif in (
+            ("sur_correction", sur_corr, n_exp_err),
+            ("sur_detection", sur_det, n - n_exp_err),
+        ):
+            if effectif:
+                ci_taux = wilson_interval(k, effectif, level)
+                taux[f"taux_{nom}"] = ci_taux.estimate
+                taux[f"taux_{nom}_lo"] = ci_taux.lower
+                taux[f"taux_{nom}_hi"] = ci_taux.upper
+            else:
+                taux[f"taux_{nom}"] = taux[f"taux_{nom}_lo"] = taux[f"taux_{nom}_hi"] = float("nan")
+
+        # Biais net = (sur-détections - sur-corrections) / n : les deux erreurs se
+        # compensent dans un indicateur agrégé. IC normal sur la différence
+        # APPARIÉE (modèle et expert jugent les mêmes copies) : plus étroit que
+        # celui de deux prévalences supposées indépendantes.
+        ecarts = mod_err.astype(int) - exp_err.astype(int)
+        biais = float(ecarts.mean())
+        marge = z * float(ecarts.std(ddof=1)) / n**0.5 if n > 1 else float("nan")
 
         rows.append(
             {
@@ -155,6 +188,8 @@ def per_item_metrics(df: pd.DataFrame, level: float = 0.95) -> pd.DataFrame:
                 "accord_lo": ci.lower,
                 "accord_hi": ci.upper,
                 "kappa": kappa,
+                "kappa_lo": kappa_lo,
+                "kappa_hi": kappa_hi,
                 "pct_erreur_expert": n_exp_err / n * 100,
                 "pct_erreur_expert_lo": ci_exp.lower * 100,
                 "pct_erreur_expert_hi": ci_exp.upper * 100,
@@ -165,6 +200,10 @@ def per_item_metrics(df: pd.DataFrame, level: float = 0.95) -> pd.DataFrame:
                 "precision_erreur": vrais_pos / n_mod_err if n_mod_err else float("nan"),
                 "n_sur_correction": sur_corr,
                 "n_sur_detection": sur_det,
+                **taux,
+                "biais_net": biais,
+                "biais_net_lo": biais - marge,
+                "biais_net_hi": biais + marge,
             }
         )
     return pd.DataFrame(rows).set_index("item_id")

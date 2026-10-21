@@ -1,8 +1,10 @@
 """Tests du module de comparaison multi-modèles."""
 
 import json
+import math
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from evaluation_dictee.evaluation.multi_model import (
@@ -161,3 +163,64 @@ def test_single_run_fallback(tmp_path: Path) -> None:
     conf = confidence_score(agree)
     # Avec un seul modèle, tous les items sont "unanimes" par construction
     assert conf.loc["A", "score_confiance"] == 100.0
+
+
+def _joint(preds: dict[str, list[str]], y_true: list[str]) -> pd.DataFrame:
+    df = pd.DataFrame({"copy_id": [f"c{i}" for i in range(len(y_true))], "y_true": y_true})
+    for run, codes in preds.items():
+        df[f"y_pred__{run}"] = codes
+    return df
+
+
+def test_pairwise_agreement_symetrique() -> None:
+    from evaluation_dictee.evaluation.multi_model import pairwise_agreement
+
+    df = _joint({"a": ["1", "9", "1", "0"], "b": ["1", "9", "9", "0"]}, ["1", "9", "1", "0"])
+    accord, kappa = pairwise_agreement(df)
+    assert accord.loc["a", "b"] == accord.loc["b", "a"] == 0.75
+    assert accord.loc["a", "a"] == 1.0
+    assert kappa.loc["a", "b"] == pytest.approx(kappa.loc["b", "a"])
+    assert 0 < kappa.loc["a", "b"] < 1
+
+
+def test_fleiss_kappa_egal_a_un_si_accord_parfait() -> None:
+    from evaluation_dictee.evaluation.multi_model import fleiss_kappa
+
+    codes = ["1", "9", "0", "1"]
+    df = _joint({"a": codes, "b": codes, "c": codes}, codes)
+    assert fleiss_kappa(df) == pytest.approx(1.0)
+
+
+def test_fleiss_kappa_deux_runs_proche_de_cohen() -> None:
+    # À deux codeurs, Fleiss vaut le kappa de Scott : proche de Cohen quand les
+    # marges des deux runs se ressemblent.
+    from sklearn.metrics import cohen_kappa_score
+
+    from evaluation_dictee.evaluation.multi_model import fleiss_kappa
+
+    a = ["1"] * 60 + ["9"] * 30 + ["0"] * 10
+    b = ["1"] * 55 + ["9"] * 5 + ["9"] * 28 + ["1"] * 2 + ["0"] * 10
+    df = _joint({"a": a, "b": b}, a)
+    assert fleiss_kappa(df) == pytest.approx(cohen_kappa_score(a, b), abs=0.01)
+
+
+def test_consensus_levels_distingue_egalite() -> None:
+    from evaluation_dictee.evaluation.multi_model import consensus_levels
+
+    df = _joint(
+        {
+            "a": ["1", "1", "1", "1"],
+            "b": ["1", "1", "9", "9"],
+            "c": ["1", "1", "1", "0"],
+            "d": ["1", "9", "9", "0"],
+        },
+        ["1", "1", "9", "1"],
+    )
+    niveaux = consensus_levels(agreement_per_item(df)).set_index(["n_accord_modeles", "egalite"])
+    # Item 1 unanime, item 2 trois contre un, item 3 deux contre deux, item 4 2-1-1.
+    assert niveaux.loc[(4, False), "n_items"] == 1
+    assert niveaux.loc[(3, False), "accord_majoritaire"] == 1.0
+    assert math.isnan(niveaux.loc[(2, True), "accord_majoritaire"])
+    assert niveaux.loc[(2, True), "accord__b"] == 1.0
+    assert niveaux.loc[(2, False), "n_items"] == 1
+    assert niveaux["pct_items"].sum() == pytest.approx(100)

@@ -4,18 +4,19 @@
 #  Identique à dictee_end2end.yaml, sur les copies 2021 (6 793 copies) au lieu
 #  de 2015. Même dictée, mêmes 83 items : la grille 2015 s'applique telle quelle.
 #
-#  Le `name` ne commence PAS par `dictee_end2end_` : le site Quarto prendrait
-#  sinon « 2021_<modele> » pour un modèle de l'approche end-to-end 2015.
+#  Nom : dictee<année>_<approche>_<prompt> (convention de `run_names.py`) — le
+#  site Quarto en déduit année, approche et prompt. Changer de prompt = changer
+#  le segment <prompt> (sans tiret bas), sinon le site confondrait les deux runs.
 #
 #  Pas d'étape de transcription en end-to-end, donc pas de fichier
 #  `_transcriptions.json` : seul le mot lu par item figure dans le JSONL
 #  (champ `transcription`).
 #
 #  Lancer : uv run scripts/run_benchmark.py --config configs/scoring/dictee2021_end2end.yaml
-#  Sortie  : data/processed/dictee2021_end2end_<modele>_predictions.jsonl
+#  Sortie  : data/processed/dictee2021_end2end_base_<modele>_predictions.jsonl
 # ═══════════════════════════════════════════════════════════════════════════
 
-name: dictee2021_end2end
+name: dictee2021_end2end_base
 seed: 42
 concurrency: 12
 

@@ -4,9 +4,9 @@
 #  Identique à dictee_two_stage.yaml, sur les copies 2021 (6 793 copies) au lieu
 #  de 2015. Même dictée, mêmes 83 items : la grille 2015 s'applique telle quelle.
 #
-#  Le `name` ne commence PAS par `dictee_two_stage_` : le site Quarto prendrait
-#  sinon « 2021_<modele> » pour un modèle de l'approche two-stage 2015. Il ne doit
-#  pas non plus reprendre celui du run 2015, dont il partagerait le checkpoint.
+#  Nom : dictee<année>_<approche>_<prompt> (convention de `run_names.py`) — le
+#  site Quarto en déduit année, approche et prompt. Changer de prompt = changer
+#  le segment <prompt> (sans tiret bas), sinon le site confondrait les deux runs.
 #
 #  Les scans 2021 sont de vrais PNG, noir et blanc comme en 2015 (2 niveaux), mais
 #  à 300 dpi (~2381×2905) au lieu de 200 dpi : le seuil de copie vierge
@@ -14,11 +14,11 @@
 #  après un premier test.
 #
 #  Lancer : uv run scripts/run_benchmark.py --config configs/scoring/dictee2021_two_stage.yaml
-#  Sortie  : data/processed/dictee2021_two_stage_<modele>_predictions.jsonl
-#            data/processed/dictee2021_two_stage_<modele>_transcriptions.json
+#  Sortie  : data/processed/dictee2021_two_stage_base_<modele>_predictions.jsonl
+#            data/processed/dictee2021_two_stage_base_<modele>_transcriptions.json
 # ═══════════════════════════════════════════════════════════════════════════
 
-name: dictee2021_two_stage
+name: dictee2021_two_stage_base
 seed: 42
 concurrency: 12
 
