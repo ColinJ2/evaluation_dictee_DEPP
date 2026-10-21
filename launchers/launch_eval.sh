@@ -357,8 +357,10 @@ PY
 # ── Lancement ─────────────────────────────────────────────────────────────────
 launch() {
   probe_config
-  check_prompt
   preflight
+  # Après preflight : un --limit sans --export y désactive l'export, et un run non
+  # exporté n'a pas besoin de --prompt.
+  check_prompt
 
   STAMP="$(date +%Y%m%d-%H%M%S)"
   LOG="logs/${RUN_NAME}_${STAMP}.log"
