@@ -120,15 +120,32 @@
    apparaissent le temps du chargement. */
 
 .vue-modele,
+.vue-modele-absente,
 .vue-paire,
-.vue-paire-identique {
+.vue-paire-identique,
+.vue-paire-absente {
   display: none;
 }
 
 .vue-modele.vue-active,
+.vue-modele-absente.vue-active,
 .vue-paire.vue-active,
-.vue-paire-identique.vue-active {
+.vue-paire-identique.vue-active,
+.vue-paire-absente.vue-active {
   display: block;
+}
+
+/* Groupe de menus propre à un mode (« années » ou « prompts ») : seul celui du
+   mode choisi est visible. Sans JavaScript, le groupe « années » reste affiché. */
+.selecteur-config .sel-groupe {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.selecteur-config .sel-groupe[hidden] {
+  display: none;
 }
 
 /* Menu déroulant : collant en haut de la zone de lecture, pour rester

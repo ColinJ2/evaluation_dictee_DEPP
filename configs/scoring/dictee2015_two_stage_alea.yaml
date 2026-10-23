@@ -1,0 +1,53 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Comparaison 2015 / 2021 — two-stage sur 200 copies 2015 TIRÉES AU HASARD
+# ═══════════════════════════════════════════════════════════════════════════
+#  Jumeau de dictee2021_two_stage_alea.yaml : mêmes modèles, même prompt, même
+#  graine ; seules les données changent. Échantillon distinct des premières
+#  copies par identifiant (nom de run propre, donc checkpoint propre).
+#
+#  Lancer : uv run scripts/run_benchmark.py --config configs/scoring/dictee2015_two_stage_alea.yaml
+#  Sortie  : data/processed/dictee2015_two_stage_alea_<modele>_predictions.jsonl
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: dictee2015_two_stage_alea
+seed: 42
+concurrency: 12
+
+approach: two_stage
+
+model:
+  name: qwen3-6-35b-moe
+  kind: vlm
+  temperature: 0.0
+  max_tokens: 8192
+  request_logprobs: true
+  max_retries: 2
+  disable_thinking: true
+  structured_output: true
+
+model_stage2:
+  name: qwen3-6-35b-moe
+  kind: llm
+  temperature: 0.0
+  max_tokens: 8192
+  structured_output: true
+  disable_thinking: true
+  max_retries: 2
+
+data:
+  corpus: dictee
+  images_path: s3://projet-production-ecrits-depp/dictee_2015/
+  labels_path: s3://projet-production-ecrits-depp/resultat_dictee_2015.csv
+  grid_path: configs/grille_dictee_2015.json
+  limit: 200
+  random_sample: true   # 200 copies tirées avec la graine `seed`, pas les 200 premières
+
+grid:
+  scheme: simplifiee
+
+prompt:
+  method: B
+  n_few_shot: 0
+  enforce_faithful: true
+  read_final_state: true
+  chain_of_thought: false

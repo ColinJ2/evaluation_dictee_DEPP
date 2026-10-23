@@ -1,6 +1,8 @@
 """Orchestration d'un run de benchmark : données -> modèle -> métriques, via `ExperimentConfig`.
 
 Prédictions écrites dans data/processed/<run_name>_predictions.jsonl (une ligne par item x copie).
+En two_stage, la transcription de l'étape 1 est aussi écrite à part, une entrée par copie :
+data/processed/<run_name>_transcriptions.json.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import os
 import statistics
 import time
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -36,6 +38,9 @@ from evaluation_dictee.utils.logging import get_logger
 from evaluation_dictee.utils.tracking import copy_trace
 
 logger = get_logger(__name__)
+
+#: Suffixe du fichier des transcriptions de l'étape 1 (two_stage) : `<run>_transcriptions.json`.
+SUFFIXE_TRANSCRIPTIONS = "_transcriptions.json"
 
 
 @dataclass
@@ -122,6 +127,45 @@ def _single_writer(out_path: Path) -> Iterator[None]:
             fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
+def ecrire_transcriptions(records: Iterable[dict], destination: Path) -> int:
+    """Écrit la transcription brute de l'étape 1 (two_stage), une entrée par copie.
+
+    Dans le JSONL de prédictions, ce texte est recopié sur les 83 lignes d'item de la
+    copie : ce fichier le donne une seule fois par copie, dans un tableau JSON trié par
+    `copy_id`. Il est réécrit en entier à chaque appel, sans ajout en fin de fichier.
+    Pour une même copie, la dernière occurrence l'emporte, comme pour les métriques.
+
+    Args:
+        records: Lignes du JSONL de prédictions (dictionnaires, une par item x copie).
+        destination: Chemin du fichier JSON à écrire.
+
+    Returns:
+        Le nombre de copies écrites ; 0 (et rien d'écrit) si aucune ligne ne porte de
+        transcription, comme en end_to_end.
+    """
+    par_copie: dict[str, dict[str, str | None]] = {}
+    for rec in records:
+        texte = rec.get("raw_transcription")
+        # None en end_to_end et sur une copie vierge (aucun appel modèle) ; NaN quand les
+        # lignes viennent d'un DataFrame pandas où la colonne est incomplète.
+        if not isinstance(texte, str):
+            continue
+        modele = rec.get("model")
+        copy_id = str(rec["copy_id"])
+        par_copie[copy_id] = {
+            "copy_id": copy_id,
+            "model": modele if isinstance(modele, str) else None,
+            "transcription": texte,
+        }
+    if not par_copie:
+        return 0
+    entrees = [par_copie[c] for c in sorted(par_copie)]
+    destination.write_text(
+        json.dumps(entrees, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return len(entrees)
+
+
 def resume_durees(durees: list[float], workers: int, n_copies_total: int) -> str:
     """Résume le temps de traitement par copie et projette la durée d'un run complet.
 
@@ -190,6 +234,7 @@ def run_benchmark(
         images_dir=config.data.images_path,
         labels_csv=config.data.labels_path,
         limit=config.data.limit,
+        seed=config.seed if config.data.random_sample else None,
     )
 
     # Échec explicite si aucune copie — évite la boucle silencieuse
@@ -218,6 +263,9 @@ def run_benchmark(
     # part. Contient des transcriptions d'écrits d'élèves mineurs — mêmes règles que le
     # reste de `data/` : jamais dans Git, jamais hors SSP Cloud.
     reasoning_path = output_dir / f"{run_name}_reasoning.jsonl"
+    # Transcription de l'étape 1 (two_stage), une entrée par copie. Mêmes règles : écrits
+    # d'élèves mineurs, jamais dans Git, jamais hors SSP Cloud.
+    transcriptions_path = output_dir / f"{run_name}{SUFFIXE_TRANSCRIPTIONS}"
     # Copies écartées des métriques : liste destinée à une VÉRIFICATION HUMAINE.
     # Une copie vierge ou illisible peut l'être pour une mauvaise raison (mauvaise
     # numérisation, seuil d'encre mal réglé) : elle doit être revue, pas oubliée.
@@ -529,6 +577,17 @@ def run_benchmark(
             "runs concurrents sur le même fichier avant l'ajout du verrou.",
             n_lignes_dupliquees,
             out_path.name,
+        )
+
+    # Régénéré depuis le JSONL dédupliqué, pas écrit copie par copie : les reprises, les
+    # purges et les doublons y sont donc déjà résolus. Un run interrompu avant cette
+    # étape se rattrape avec scripts/backfill_transcriptions.py.
+    n_transcriptions = ecrire_transcriptions(par_cle.values(), transcriptions_path)
+    if n_transcriptions:
+        logger.info(
+            "Transcriptions de l'étape 1 sauvegardées (%d copies) : %s",
+            n_transcriptions,
+            transcriptions_path,
         )
 
     # Exclusion des métriques : copies vierges (auto-codées sans appel modèle) et

@@ -151,7 +151,9 @@ REUSSITE_PAR_ITEM: list[tuple[str, list[float]]] = [
 assert len(REUSSITE_PAR_ITEM) == 83, "la dictée compte 83 items"
 
 ITEMS, MOTS, RANGS = A.charger_grille()
-RUNS, N_COMMUN = A.restreindre_corpus_commun(A.charger_runs())
+#: Les tableaux publiés se comparent au corpus 2015, prompt de référence.
+CONFIG_DEPP = (2015, A.PROMPT_REFERENCE)
+RUNS, N_COMMUN = A.restreindre_corpus_commun(A.charger_runs(config=CONFIG_DEPP))
 
 
 def fr(x: float, d: int = 1) -> str:
@@ -359,7 +361,7 @@ def table_phrase(debut: int, taille: int, modele: str) -> str:
         + "".join(f"<td>{fr(EXPERT[i])}</td>" for i in ids)
         + "</tr>"
     )
-    for approche in A.approches_du_modele(modele):
+    for approche in A.approches_du_modele(modele, CONFIG_DEPP):
         label = A.libelle_run(approche, modele)
         if label not in REUSSITE_RUNS:
             continue

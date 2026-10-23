@@ -41,6 +41,10 @@ DO_EXPORT=1
 EXPORT_EXPLICIT=0
 FORCE_EXPORT=0
 DEST_PREFIX=""
+# Dossier lu par le site : destination par défaut d'un run exporté (--prompt), pour
+# qu'un oubli de --dest-prefix ne range pas le run là où le site ne le voit pas.
+SITE_DEST_PREFIX="s3://projet-production-ecrits-depp/prediction_depp"
+PROMPT=""              # nom du prompt, obligatoire si export (cf. run_names.py)
 SKIP_CHECKS=0
 FOREGROUND=0
 MODE="launch"          # launch | status | stop | chain
@@ -82,16 +86,21 @@ OPTIONS DE LANCEMENT
   --passes N               Nombre de passes max, relance des échecs incluse. [défaut : 3]
   --no-export              Ne pas exporter vers S3 à la fin.
   --export                 Forcer l'export même avec --limit.
-  --dest-prefix S3URI      Destination de l'export.   [défaut : $S3_PREDICTIONS_PREFIX]
+  --dest-prefix S3URI      Destination de l'export.   [défaut : dossier lu par le site,
+                           s3://projet-production-ecrits-depp/prediction_depp]
+  --prompt NOM             Nom du prompt du run (ex. base). OBLIGATOIRE dès que le run
+                           est exporté : il doit figurer dans le nom du run
+                           (dictee<AAAA>_<approche>_<prompt>), vérifié AVANT le lancement.
   --force-export           Exporter même si le fichier local est plus petit que le
                            fichier déjà présent sur S3 (garde-fou anti-écrasement).
   --skip-checks            Sauter les appels de vérification (modèle, S3). Déconseillé.
   --foreground             Exécuter la chaîne dans le terminal (débogage, CI).
 
 EXEMPLES
-  launchers/launch_eval.sh
-  launchers/launch_eval.sh --config configs/scoring/dictee_two_stage.yaml
-  launchers/launch_eval.sh --model-name gemma4-26b-moe
+  launchers/launch_eval.sh --prompt base                  # 2015, end-to-end
+  launchers/launch_eval.sh --config configs/scoring/dictee2021_two_stage.yaml --prompt base
+  launchers/launch_eval.sh --config configs/scoring/dictee2021_end2end_majponct.yaml --prompt majponct
+  launchers/launch_eval.sh --model-name gemma4-26b-moe --prompt base
   launchers/launch_eval.sh --limit 5 --skip-checks        # fumée, 5 copies
   launchers/launch_eval.sh --status
   launchers/launch_eval.sh --stop
@@ -115,6 +124,7 @@ while [[ $# -gt 0 ]]; do
     --no-export)         DO_EXPORT=0; EXPORT_EXPLICIT=1; shift ;;
     --export)            DO_EXPORT=1; EXPORT_EXPLICIT=1; shift ;;
     --dest-prefix)       DEST_PREFIX="$2"; shift 2 ;;
+    --prompt)            PROMPT="$2"; shift 2 ;;
     --force-export)      FORCE_EXPORT=1; shift ;;
     --skip-checks)       SKIP_CHECKS=1; shift ;;
     --foreground)        FOREGROUND=1; shift ;;
@@ -166,6 +176,24 @@ PY
   done <<<"$out"
   [[ -n $RUN_NAME ]] || die "Impossible de résoudre le nom du run depuis $CONFIG"
   set_paths
+}
+
+# Un run exporté alimente le site, qui le classe par année, approche et prompt lus
+# dans son nom : le prompt doit donc être déclaré (--prompt) et figurer dans le nom.
+# Vérifié AVANT le lancement, pour ne pas découvrir l'erreur après ~30 h de run.
+check_prompt() {
+  (( DO_EXPORT == 1 )) || return 0
+  [[ -n $PROMPT ]] || die "--prompt est obligatoire quand le run est exporté (ex. --prompt base), ou passer --no-export."
+  local out
+  if ! out=$(uv run python -c 'import sys
+from evaluation_dictee.run_names import verifier_prompt
+verifier_prompt(sys.argv[1], sys.argv[2])' "$RUN_NAME" "$PROMPT" 2>&1); then
+    printf '%s\n' "$out" | tail -1 >&2
+    die "Nom du run incompatible avec --prompt ${PROMPT}."
+  fi
+  ok "Prompt « ${PROMPT} » présent dans le nom du run (${RUN_NAME})"
+  [[ -n $DEST_PREFIX ]] || DEST_PREFIX="$SITE_DEST_PREFIX"
+  ok "export vers ${DEST_PREFIX}"
 }
 
 set_paths() {
@@ -337,6 +365,9 @@ PY
 launch() {
   probe_config
   preflight
+  # Après preflight : un --limit sans --export y désactive l'export, et un run non
+  # exporté n'a pas besoin de --prompt.
+  check_prompt
 
   STAMP="$(date +%Y%m%d-%H%M%S)"
   LOG="logs/${RUN_NAME}_${STAMP}.log"
@@ -349,12 +380,13 @@ launch() {
   if [[ -n $MODEL_STAGE2_NAME ]]; then worker+=( --model-stage2-name "$MODEL_STAGE2_NAME" ); fi
   if [[ -n $LIMIT_CLI ]];         then worker+=( --limit "$LIMIT_CLI" ); fi
   if [[ -n $DEST_PREFIX ]];       then worker+=( --dest-prefix "$DEST_PREFIX" ); fi
+  if [[ -n $PROMPT ]];            then worker+=( --prompt "$PROMPT" ); fi
   if (( DO_EXPORT == 0 ));        then worker+=( --no-export ); fi
   if (( FORCE_EXPORT == 1 ));     then worker+=( --force-export ); fi
 
   local EXPORT_LABEL
   if (( DO_EXPORT == 1 )); then
-    EXPORT_LABEL="oui, à la fin du run (nom : ${RUN_NAME}_predictions.jsonl)"
+    EXPORT_LABEL="oui, à la fin du run (${DEST_PREFIX}/${RUN_NAME}_predictions.jsonl)"
   elif [[ -n $LIMIT_CLI ]]; then
     EXPORT_LABEL="non — run partiel (--limit). Forcer avec --export."
   else
@@ -500,14 +532,14 @@ chain() {
   if (( DO_EXPORT == 0 )); then
     echo "#EXPORT skipped=--no-export"
     echo "Export S3 non demandé. Pour l'exporter plus tard :"
-    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation"
+    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>} --dest-prefix ${DEST_PREFIX:-$SITE_DEST_PREFIX}"
     return 0
   fi
   if (( last_rc != 0 )); then
     echo "#EXPORT skipped=run_incomplet rc=${last_rc}"
     echo "Le run s'est terminé en erreur : pas d'export automatique (un JSONL"
     echo "incomplet écraserait un export S3 plus complet). Après diagnostic :"
-    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation"
+    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>} --dest-prefix ${DEST_PREFIX:-$SITE_DEST_PREFIX}"
     return 0
   fi
 
@@ -551,7 +583,7 @@ PY
   elif (( grc != 0 )); then
     echo "#EXPORT skipped=verification_impossible rc=${grc}"
     echo "Accès S3 non vérifiable : export manuel après diagnostic —"
-    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation"
+    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>} --dest-prefix ${DEST_PREFIX:-$SITE_DEST_PREFIX}"
     return 0
   fi
 
@@ -559,9 +591,11 @@ PY
   # ne peut pas déduire seul la destination et l'exigerait sinon explicitement. Ce
   # lanceur ne traite QUE l'échantillon complet (un `limit` dans le YAML fait échouer
   # probe_config plus haut) ; le seul cas contraire est --limit + --export forcé par
-  # un humain qui sait ce qu'il fait — pour lui aussi, la destination reste
-  # `predictions/`, comportement inchangé depuis avant l'introduction du sous-dossier.
-  local -a export_cmd=( uv run scripts/export_predictions.py --run-name "$RUN_NAME" --no-experimentation )
+  # un humain qui sait ce qu'il fait. La destination vient de check_prompt (dossier
+  # du site par défaut) ; sans elle, export_predictions.py retombe sur
+  # S3_PREDICTIONS_PREFIX.
+  local -a export_cmd=( uv run scripts/export_predictions.py --run-name "$RUN_NAME" --no-experimentation
+                        --prompt "$PROMPT" )
   if [[ -n $DEST_PREFIX ]]; then export_cmd+=( --dest-prefix "$DEST_PREFIX" ); fi
   echo "commande : ${export_cmd[*]}"
   if "${export_cmd[@]}"; then
@@ -615,6 +649,22 @@ status() {
       pdone=$(sed 's/.*done=\([0-9]*\).*/\1/' <<<"$pstart")
       # shellcheck disable=SC2001
       pstart=$(sed 's/.*epoch=\([0-9]*\).*/\1/' <<<"$pstart")
+      # Le chargement S3 (~5 min) n'écrit aucune copie : mesurer depuis le début de
+      # la passe sous-estimait le débit et repoussait la fin estimée (20 h annoncées
+      # pour ~11 h réelles). On part donc de la fin du chargement, la ligne « N copies
+      # au total », horodatée [HH:MM:SS] par rich (dernier horodatage qui la précède
+      # si rich l'a omis, même seconde). Sans elle, chargement en cours : rien à mesurer.
+      local tload
+      tload=$(awk '/^#PASS_START/{n=NR} END{print n}' "$log")
+      tload=$(tail -n +"${tload:-1}" "$log" \
+        | awk 'match($0, /\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\]/){t=substr($0, RSTART+1, 8)}
+               /copies au total/{print t; exit}')
+      if [[ -n $tload ]]; then
+        tload=$(date -d "$(date -d "@${pstart}" +%F) ${tload}" +%s 2>/dev/null || echo "")
+        # Chargement terminé après minuit : l'horodatage est celui du lendemain.
+        if [[ -n $tload ]] && (( tload < pstart )); then tload=$(( tload + 86400 )); fi
+        [[ -n $tload ]] && pstart=$tload
+      fi
       now=$(date +%s); elapsed=$(( now - pstart )); made=$(( done_n - pdone ))
       if (( elapsed > 60 && made > 0 )); then
         rate=$(awk -v m="$made" -v e="$elapsed" 'BEGIN{printf "%.1f", m*3600/e}')

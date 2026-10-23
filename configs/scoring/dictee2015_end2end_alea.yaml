@@ -1,0 +1,44 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Comparaison 2015 / 2021 — end-to-end sur 200 copies 2015 TIRÉES AU HASARD
+# ═══════════════════════════════════════════════════════════════════════════
+#  Jumeau de dictee2015_two_stage_alea.yaml : même graine et même limit, donc
+#  les MÊMES 200 copies (comparaison one stage / two stage à copies égales).
+#  Paramètres modèle/prompt identiques à dictee_end2end.yaml.
+#
+#  Lancer : launchers/launch_eval.sh --config configs/scoring/dictee2015_end2end_alea.yaml --limit 200
+#  Sortie  : data/processed/dictee2015_end2end_alea_<modele>_predictions.jsonl
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: dictee2015_end2end_alea
+seed: 42
+concurrency: 12
+
+approach: end_to_end
+
+model:
+  name: qwen3-6-35b-moe
+  kind: vlm
+  temperature: 0.0
+  max_tokens: 8192
+  request_logprobs: true
+  max_retries: 2
+  disable_thinking: true
+  structured_output: true
+
+data:
+  corpus: dictee
+  images_path: s3://projet-production-ecrits-depp/dictee_2015/
+  labels_path: s3://projet-production-ecrits-depp/resultat_dictee_2015.csv
+  grid_path: configs/grille_dictee_2015.json
+  limit: 200
+  random_sample: true   # 200 copies tirées avec la graine `seed`, pas les 200 premières
+
+grid:
+  scheme: simplifiee
+
+prompt:
+  method: C
+  n_few_shot: 0
+  enforce_faithful: true
+  read_final_state: true
+  chain_of_thought: false

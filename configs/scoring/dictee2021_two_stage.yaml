@@ -1,0 +1,64 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Run scoring dictée 2021 — MÉTHODE B (two-stage : transcription puis codage)
+# ═══════════════════════════════════════════════════════════════════════════
+#  Identique à dictee_two_stage.yaml, sur les copies 2021 (6 793 copies) au lieu
+#  de 2015. Même dictée, mêmes 83 items : la grille 2015 s'applique telle quelle.
+#
+#  Nom : dictee<année>_<approche>_<prompt> (convention de `run_names.py`) — le
+#  site Quarto en déduit année, approche et prompt. Changer de prompt = changer
+#  le segment <prompt> (sans tiret bas), sinon le site confondrait les deux runs.
+#
+#  Les scans 2021 sont de vrais PNG, noir et blanc comme en 2015 (2 niveaux), mais
+#  à 300 dpi (~2381×2905) au lieu de 200 dpi : le seuil de copie vierge
+#  (`blank_ink_threshold`) a été réglé sur 2015, relire `<run>_copies_ecartees.csv`
+#  après un premier test.
+#
+#  Lancer : uv run scripts/run_benchmark.py --config configs/scoring/dictee2021_two_stage.yaml
+#  Sortie  : data/processed/dictee2021_two_stage_base_<modele>_predictions.jsonl
+#            data/processed/dictee2021_two_stage_base_<modele>_transcriptions.json
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: dictee2021_two_stage_base
+seed: 42
+concurrency: 12
+
+approach: two_stage
+
+# Étape 1 = transcription (doit être multimodal pour lire l'image).
+model:
+  name: qwen3-6-35b-moe # gemma4-26b-moe
+  kind: vlm
+  temperature: 0.0
+  max_tokens: 8192
+  request_logprobs: true
+  max_retries: 2
+  disable_thinking: true
+  structured_output: true
+
+# Étape 2 = codage textuel (modèle texte seul, obligatoire en two_stage).
+model_stage2:
+  name: qwen3-6-35b-moe # ou gemma4-26b-moe
+  kind: llm
+  temperature: 0.0
+  max_tokens: 8192
+  structured_output: true
+  disable_thinking: true
+  max_retries: 2
+
+data:
+  corpus: dictee
+  images_path: s3://projet-production-ecrits-depp/dictee_2021/
+  # Format LONG (dictee;num_item;corrige), reconnu par data/loaders.load_labels.
+  labels_path: s3://projet-production-ecrits-depp/correction_dictee_2021.csv
+  grid_path: configs/grille_dictee_2015.json
+  limit: null
+
+grid:
+  scheme: simplifiee
+
+prompt:
+  method: B
+  n_few_shot: 0
+  enforce_faithful: true
+  read_final_state: true
+  chain_of_thought: false

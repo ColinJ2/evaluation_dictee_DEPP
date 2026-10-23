@@ -45,7 +45,8 @@ lancement, relance les copies en échec et exporte vers S3. Détails : `--help`,
 - Un bras testé sur échantillon (chain-of-thought, comptage, exemples de fautes…) s'exporte
   dans `predictions/experimentations/`, **jamais** dans `predictions/` (sinon faux modèle
   sur le site ; décision D9, `scripts/export_predictions.py` route selon l'effectif réel).
-- Publier un bras comme approche du site est **manuel** : run sur le corpus complet,
-  vérifier l'export à la racine de `predictions/`, puis ajouter une ligne dans
-  `MODELES_PROMUS` (`website/_analyse.py`). Rien n'est déduit d'un nom de fichier
-  (décision D10).
+- Publier un prompt sur le site : run sur le corpus complet, `name` de config au
+  format `dictee<AAAA>_<end2end|two_stage>_<prompt>` (prompt sans tiret bas, `base` =
+  prompt par défaut), lancé avec `--prompt <prompt>` : le lanceur refuse un nom non
+  conforme et exporte par défaut vers `prediction_depp/` (dossier lu par le site). Le site lit tout dans le nom ; un nom non conforme est ignoré
+  (décision D12, `src/evaluation_dictee/run_names.py`).

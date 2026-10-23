@@ -4,6 +4,7 @@ import math
 
 import pandas as pd
 import pytest
+from sklearn.metrics import cohen_kappa_score
 
 from evaluation_dictee.evaluation.calibration import (
     expected_calibration_error,
@@ -50,6 +51,38 @@ def test_kappa_interval_encadre_estimation() -> None:
     ci = kappa_interval(y_true, y_pred)
     assert 0 < ci.estimate < 1
     assert ci.lower < ci.estimate < ci.upper
+
+
+def test_kappa_interval_erreurs_rares_non_degenere() -> None:
+    """Régression : l'ancienne formule (terme diagonal non élevé au carré, indices
+    hors diagonale croisés) rendait un IC de largeur NULLE quand les erreurs sont
+    rares — le cas de la plupart des items de la dictée. Bornes de référence :
+    bootstrap de 1 000 rééchantillonnages, [0,196 ; 0,396].
+    """
+    y_true = ["1"] * 3300 + ["9"] * 100
+    y_pred = ["1"] * 3290 + ["9"] * 10 + ["1"] * 80 + ["9"] * 20
+    ci = kappa_interval(y_true, y_pred)
+    assert ci.lower == pytest.approx(0.196, abs=0.01)
+    assert ci.upper == pytest.approx(0.396, abs=0.01)
+
+
+def test_kappa_interval_trois_codes_proche_du_bootstrap() -> None:
+    """Trois catégories (1/9/0) : bornes de référence par bootstrap, [0,578 ; 0,665]."""
+    y_true = ["1"] * 500 + ["9"] * 300 + ["0"] * 200
+    y_pred = (
+        ["1"] * 420
+        + ["9"] * 60
+        + ["0"] * 20
+        + ["9"] * 200
+        + ["1"] * 80
+        + ["0"] * 20
+        + ["0"] * 150
+        + ["1"] * 30
+        + ["9"] * 20
+    )
+    ci = kappa_interval(y_true, y_pred)
+    assert ci.lower == pytest.approx(0.578, abs=0.01)
+    assert ci.upper == pytest.approx(0.665, abs=0.01)
 
 
 def test_kappa_interval_accord_parfait_interval_serre() -> None:
@@ -211,10 +244,31 @@ def test_cluster_bootstrap_reproductible() -> None:
 # ── Rapport par item / copie ──────────────────────────────────────────────────
 def test_per_item_metrics_colonnes() -> None:
     stats = per_item_metrics(_df_jouet())
-    for col in ["accord", "accord_lo", "accord_hi", "rappel_erreur", "n_sur_correction"]:
+    for col in ["accord", "accord_lo", "accord_hi", "kappa", "kappa_lo", "kappa_hi"]:
         assert col in stats.columns
     assert (stats["accord_lo"] <= stats["accord"]).all()
     assert (stats["accord"] <= stats["accord_hi"]).all()
+    definis = stats.dropna(subset=["kappa"])
+    assert (definis["kappa_lo"] <= definis["kappa"]).all()
+    assert (definis["kappa"] <= definis["kappa_hi"]).all()
+
+
+def test_kappa_par_item_et_son_intervalle() -> None:
+    """Kappa d'un item = celui de ses seules observations, IC qui l'encadre."""
+    y_true = ["1"] * 60 + ["9"] * 40
+    y_pred = ["1"] * 55 + ["9"] * 5 + ["9"] * 30 + ["1"] * 10
+    df = pd.DataFrame(
+        {
+            "copy_id": [f"c{i}" for i in range(100)],
+            "item_id": ["i1"] * 100,
+            "y_true": y_true,
+            "y_pred": y_pred,
+        }
+    )
+    stats = per_item_metrics(df)
+    attendu = cohen_kappa_score(y_true, y_pred)
+    assert stats.loc["i1", "kappa"] == pytest.approx(attendu)
+    assert stats.loc["i1", "kappa_lo"] < attendu < stats.loc["i1", "kappa_hi"]
 
 
 def test_sur_correction_et_sur_detection() -> None:
@@ -235,6 +289,41 @@ def test_sur_correction_et_sur_detection() -> None:
     # 2 erreurs expert, 1 retrouvée → rappel 0.5 ; 2 erreurs modèle, 1 confirmée → précision 0.5
     assert stats.loc["i1", "rappel_erreur"] == 0.5
     assert stats.loc["i1", "precision_erreur"] == 0.5
+    # Taux : 1 sur-correction parmi 2 fautes expert, 1 sur-détection parmi 2 corrects.
+    assert stats.loc["i1", "taux_sur_correction"] == 0.5
+    assert stats.loc["i1", "taux_sur_detection"] == 0.5
+    assert (
+        stats.loc["i1", "taux_sur_correction_lo"] < 0.5 < stats.loc["i1", "taux_sur_correction_hi"]
+    )
+
+
+def test_taux_sur_correction_non_defini_sans_faute_expert() -> None:
+    df = pd.DataFrame(
+        {
+            "copy_id": ["a", "b"],
+            "item_id": ["i1", "i1"],
+            "y_true": ["1", "1"],
+            "y_pred": ["1", "9"],
+        }
+    )
+    stats = per_item_metrics(df)
+    assert math.isnan(stats.loc["i1", "taux_sur_correction"])
+    assert stats.loc["i1", "taux_sur_detection"] == 0.5
+
+
+def test_biais_net_compense_les_deux_erreurs() -> None:
+    # 2 sur-détections, 1 sur-correction sur 10 copies : biais net = +0,1.
+    df = pd.DataFrame(
+        {
+            "copy_id": [f"c{i}" for i in range(10)],
+            "item_id": ["i1"] * 10,
+            "y_true": ["1", "1", "9"] + ["1"] * 4 + ["9"] * 3,
+            "y_pred": ["9", "9", "1"] + ["1"] * 4 + ["9"] * 3,
+        }
+    )
+    stats = per_item_metrics(df)
+    assert stats.loc["i1", "biais_net"] == pytest.approx(0.1)
+    assert stats.loc["i1", "biais_net_lo"] < 0.1 < stats.loc["i1", "biais_net_hi"]
 
 
 def test_per_copy_metrics() -> None:

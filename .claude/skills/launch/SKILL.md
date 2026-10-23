@@ -1,6 +1,6 @@
 ---
 name: launch
-description: Lance, surveille ou arrête une évaluation COMPLÈTE de la dictée (~3 500 copies, ~30 h) sur le SSP Cloud. À utiliser dès que l'utilisateur demande de lancer un run, un benchmark, une évaluation sur tout l'échantillon, ou de savoir où en est un run en cours. Le run survit à la fermeture de la session.
+description: Lance, surveille ou arrête une évaluation COMPLÈTE de la dictée (2015 : ~3 470 copies, 2021 : 6 793 copies ; des heures) sur le SSP Cloud. À utiliser dès que l'utilisateur demande de lancer un run, un benchmark, une évaluation sur tout l'échantillon, ou de savoir où en est un run en cours. Le run survit à la fermeture de la session.
 ---
 
 # Lancer une évaluation complète de la dictée
@@ -14,18 +14,41 @@ orphelins, log écrasé, export sous un mauvais nom).
 ## Les trois commandes
 
 ```bash
-launchers/launch_eval.sh                      # lancer (config par défaut : dictee_end2end)
-launchers/launch_eval.sh --status             # où en est le run : copies, débit, ETA
-launchers/launch_eval.sh --stop               # arrêter proprement
+C=configs/scoring/dictee2021_end2end.yaml
+launchers/launch_eval.sh --config $C --prompt base   # lancer
+launchers/launch_eval.sh --config $C --status        # où en est le run : copies, débit, ETA
+launchers/launch_eval.sh --config $C --stop          # arrêter proprement
 ```
 
-Si l'utilisateur vise une autre approche ou un autre modèle, ajouter les mêmes options
-aux **trois** commandes, sinon `--status`/`--stop` viseraient un autre run :
+`--config` (et `--model-name` si le modèle est surchargé) doit être **répété sur les
+trois commandes**, sinon `--status`/`--stop` viseraient un autre run (sans `--config`,
+c'est `dictee_end2end.yaml`, la dictée 2015). `--prompt` ne sert qu'au lancement.
 
-```bash
-launchers/launch_eval.sh --config configs/scoring/dictee_two_stage.yaml
-launchers/launch_eval.sh --model-name gemma4-26b-moe
-```
+## Nommage obligatoire d'un run publié (décision D12)
+
+Un run complet est exporté pour le site, qui lit **année, approche et prompt dans le
+nom du run**. Le champ `name` du YAML doit donc suivre
+`dictee<AAAA>_<end2end|two_stage>_<prompt>` (prompt sans tiret bas, `base` = prompt
+par défaut), et le lanceur reçoit `--prompt <prompt>` : il **refuse de partir** si
+`--prompt` manque ou ne figure pas dans le nom. L'export va par défaut dans
+`s3://projet-production-ecrits-depp/prediction_depp` (dossier lu par le site) ; ne
+passer `--dest-prefix` que pour viser ailleurs.
+
+| Config                                          | `name`                          | `--prompt` | Copies |
+|-------------------------------------------------|---------------------------------|------------|--------|
+| `configs/scoring/dictee_end2end.yaml`           | `dictee2015_end2end_base`       | `base`     | ~3 470 |
+| `configs/scoring/dictee_two_stage.yaml`         | `dictee2015_two_stage_base`     | `base`     | ~3 470 |
+| `configs/scoring/dictee2021_end2end.yaml`       | `dictee2021_end2end_base`       | `base`     | 6 793  |
+| `configs/scoring/dictee2021_two_stage.yaml`     | `dictee2021_two_stage_base`     | `base`     | 6 793  |
+| `configs/scoring/dictee2021_end2end_majponct.yaml`   | `dictee2021_end2end_majponct`   | `majponct` | 6 793  |
+| `configs/scoring/dictee2021_two_stage_majponct.yaml` | `dictee2021_two_stage_majponct` | `majponct` | 6 793  |
+
+**Nouveau prompt** : copier la config de base de l'année et de l'approche, changer
+`name` (ex. `dictee2021_end2end_monprompt`) et les options du bloc `prompt:`, puis
+lancer avec `--prompt monprompt`. Rien à coder côté site : le prompt apparaît dans
+les menus au prochain rendu. Les configs `dictee_end2end_<bras>.yaml` (cot,
+comptage…) sont des bras sur échantillon, hors de cette convention : `--no-export`
+ou export vers `predictions/experimentations/` (D9).
 
 `launchers/launch_eval.sh --help` liste tout le reste (`--limit`, `--passes`,
 `--no-export`, `--dest-prefix`, `--skip-checks`, `--foreground`).
@@ -44,17 +67,17 @@ launchers/launch_eval.sh --model-name gemma4-26b-moe
 4. **Relance des échecs** : jusqu'à `--passes` passages (3 par défaut). Le pipeline
    reprend seul les copies listées dans `failed_copies.txt`. La chaîne s'arrête dès
    qu'il n'y a plus d'échec, ou dès que le reliquat cesse de diminuer.
-5. **Export S3 final** sous le nom exact du run, avec un garde-fou : il refuse
+5. **Export S3 final** vers `prediction_depp/` sous le nom exact du run, avec un garde-fou : il refuse
    d'écraser un fichier S3 **plus gros** que le fichier local (protection contre
    l'écrasement d'un run complet par un run partiel).
 
 ## À savoir pour répondre à l'utilisateur
 
-- **Durée** : ~3 469 copies. Compter des heures ; `--status` donne un débit mesuré et
+- **Durée** : ~3 470 copies (2015) ou 6 793 (2021), ~600-800 copies/h à concurrence 12. Compter des heures ; `--status` donne un débit mesuré et
   une heure de fin estimée, bien plus fiable qu'une estimation a priori.
 - **Reprise** : après un crash ou un `--stop`, relancer **exactement la même commande**.
   Les copies déjà écrites sont sautées, rien n'est perdu sauf la copie en cours.
-- **Nommage** : tout est suffixé par le(s) modèle(s) — `<name>_<modèle>_predictions.jsonl`.
+- **Fichiers** : tout est suffixé par le(s) modèle(s) — `<name>_<modèle>_predictions.jsonl`.
   Deux modèles n'écrasent jamais le même fichier, et peuvent tourner en parallèle.
 - **Logs** : `logs/<run>_<horodatage>.log`, un par lancement, jamais écrasé ;
   `logs/<run>.latest.log` pointe sur le dernier.
@@ -66,6 +89,8 @@ launchers/launch_eval.sh --model-name gemma4-26b-moe
 
 ## Après le run
 
-Les prédictions sont sur S3 (export automatique) et en local dans
-`data/processed/`. L'analyse se fait dans `notebooks/03_analyse_resultats.ipynb`
+Les prédictions sont sur S3 (`prediction_depp/`, export automatique) et en local
+dans `data/processed/`. Pour les voir sur le site : `uv run quarto render
+website/resultats.qmd` (nommer la page : avec `freeze: auto`, un rendu global ne
+recalcule pas une page dont seules les données ont changé). L'analyse se fait dans `notebooks/03_analyse_resultats.ipynb`
 (métriques) et `notebooks/04_diagnostic.ipynb` (copies les plus en désaccord).

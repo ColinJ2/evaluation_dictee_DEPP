@@ -1,0 +1,53 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Run scoring dictée 2021 — MÉTHODE C (end-to-end)
+# ═══════════════════════════════════════════════════════════════════════════
+#  Identique à dictee_end2end.yaml, sur les copies 2021 (6 793 copies) au lieu
+#  de 2015. Même dictée, mêmes 83 items : la grille 2015 s'applique telle quelle.
+#
+#  Nom : dictee<année>_<approche>_<prompt> (convention de `run_names.py`) — le
+#  site Quarto en déduit année, approche et prompt. Changer de prompt = changer
+#  le segment <prompt> (sans tiret bas), sinon le site confondrait les deux runs.
+#
+#  Pas d'étape de transcription en end-to-end, donc pas de fichier
+#  `_transcriptions.json` : seul le mot lu par item figure dans le JSONL
+#  (champ `transcription`).
+#
+#  Lancer : uv run scripts/run_benchmark.py --config configs/scoring/dictee2021_end2end.yaml
+#  Sortie  : data/processed/dictee2021_end2end_base_<modele>_predictions.jsonl
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: dictee2021_end2end_base
+seed: 42
+concurrency: 12
+
+approach: end_to_end
+
+model:
+  name: qwen3-6-35b-moe #ou gemma4-26b-moe
+  kind: vlm
+  temperature: 0.0
+  max_tokens: 8192
+  request_logprobs: true
+  max_retries: 2
+  disable_thinking: true
+  structured_output: true
+
+# Pas de bloc model_stage2 en end_to_end (une seule passe).
+
+data:
+  corpus: dictee
+  images_path: s3://projet-production-ecrits-depp/dictee_2021/
+  # Format LONG (dictee;num_item;corrige), reconnu par data/loaders.load_labels.
+  labels_path: s3://projet-production-ecrits-depp/correction_dictee_2021.csv
+  grid_path: configs/grille_dictee_2015.json
+  limit: null
+
+grid:
+  scheme: simplifiee
+
+prompt:
+  method: C
+  n_few_shot: 0
+  enforce_faithful: true
+  read_final_state: true
+  chain_of_thought: false

@@ -46,7 +46,10 @@ try:
     from evaluation_dictee.evaluation.multi_model import (
         agreement_per_item,
         confidence_score,
+        consensus_levels,
         disagreement_type_summary,
+        fleiss_kappa,
+        pairwise_agreement,
         referral_curve_with_ci,
     )
     from evaluation_dictee.evaluation.report import (
@@ -62,10 +65,17 @@ try:
         kappa_interval_clustered,
         wilson_interval,
     )
+    from evaluation_dictee.run_names import PROMPT_BASE, analyser_nom_run
 
     PAQUET_OK = True
 except ImportError as exc:  # noqa: BLE001 — la page doit rester rendable
     PAQUET_OK = False
+    PROMPT_BASE = "base"
+
+    def analyser_nom_run(nom: str) -> None:  # type: ignore[misc]
+        """Sans le paquet, aucun run n'est reconnu."""
+        return None
+
     NOTES.append(
         f"Paquet `evaluation_dictee` non importable ({exc}) : aucun chiffre n'a pu "
         "être calculé. Rendre le site depuis l'environnement du projet "
@@ -74,8 +84,12 @@ except ImportError as exc:  # noqa: BLE001 — la page doit rester rendable
 
 # ── Paramètres du site ────────────────────────────────────────────────────────
 #: Racine des prédictions exportées. Pointer sur un dossier local pour un rendu
-#: hors ligne : `export S3_PREDICTIONS_PREFIX=/chemin/vers/predictions`.
-PREFIX = os.environ.get("S3_PREDICTIONS_PREFIX", "s3://projet-production-ecrits-depp/predictions")
+#: hors ligne : `export S3_PREDICTIONS_PREFIX=/chemin/vers/predictions`. Le site ne
+#: lit que les runs nommés selon la convention de `evaluation_dictee/run_names.py`
+#: (`dictee<AAAA>_<approche>_<prompt>_<modele>`), déposés dans `prediction_depp/`.
+PREFIX = os.environ.get(
+    "S3_PREDICTIONS_PREFIX", "s3://projet-production-ecrits-depp/prediction_depp"
+)
 
 
 def _liste_env(variable: str, defaut: list[str]) -> list[str]:
@@ -85,62 +99,41 @@ def _liste_env(variable: str, defaut: list[str]) -> list[str]:
     return valeurs or defaut
 
 
-#: Approches comparées, dans l'ordre d'affichage : libellé → champ `name` du YAML.
-#: Ce sont les deux MÉTHODES du projet (.claude/rules/methodologie.md) — end-to-end une passe vs
-#: two-stage HTR+codage — PAS des variantes de prompt. `modeles_exportes()` déduit
-#: automatiquement la liste des modèles depuis S3 en retirant ces deux préfixes ;
-#: y ajouter une approche de plus déduite d'un nom de fichier a déjà provoqué un
-#: bug (D9 — un run `dictee_end2end_cot_<modele>` lu comme un faux modèle) et un
-#: second, plus subtil (deux préfixes qui se chevauchent : `dictee_end2end` est
-#: aussi un préfixe de `dictee_end2end_comptage_exemples`). Voir `MODELES_PROMUS`
-#: ci-dessous pour publier une variante de prompt sans reproduire ces bugs :
-#: la promotion y est déclarée à la main, jamais déduite d'un nom de fichier.
+#: Approches comparées, dans l'ordre d'affichage : libellé → segment du nom de run.
+#: Ce sont les deux MÉTHODES du projet (.claude/rules/methodologie.md) — end-to-end une
+#: passe vs two-stage HTR+codage. Les variantes de prompt sont un AUTRE axe, lu dans
+#: le segment <prompt> du nom (décision D12) : plus rien n'est déduit d'un préfixe,
+#: ce qui supprime les confusions de la décision D9 (`dictee_end2end_cot_<modele>`
+#: lu comme un faux modèle).
 APPROCHES: dict[str, str] = {
-    "end-to-end": "dictee_end2end",
-    "two-stage": "dictee_two_stage",
-}
-
-#: Promotion manuelle d'un modèle vers le MEILLEUR prompt end-to-end trouvé pour lui
-#: (décision D10, docs/decisions.md). Le gain n'étant PAS uniforme entre modèles —
-#: qwen3-8-27b et qwen3-6-35b-moe gagnent avec comptage+exemples, gemma4-26b-moe
-#: gagne avec exemples seul, et y perdrait avec comptage+exemples — ce choix reste
-#: manuel : rien n'est déduit automatiquement d'un nom de fichier.
-#:
-#: Clé = nom du modèle. Valeur = nom du run promu (champ `name` de sa config, SANS
-#: le suffixe modèle). Volontairement séparé d'`APPROCHES` : un modèle non promu ne
-#: doit jamais être signalé « incomplet » au seul motif qu'il n'a pas de promotion
-#: (voir `approche_promue`, jamais mêlée à `approches_du_modele`/`MODELES_COMPLETS`).
-#:
-#: Pour publier un modèle ici :
-#:   1. Lancer son run sur le corpus COMPLET (launchers/launch_eval.sh, SANS --limit) ;
-#:   2. Vérifier l'export à la racine de `predictions/` (pas `experimentations/` —
-#:      un run partiel y est automatiquement écarté, voir décision D9) ;
-#:   3. Ajouter la ligne ci-dessous, puis re-render le site.
-MODELES_PROMUS: dict[str, str] = {
-    # "qwen3-8-27b": "dictee_end2end_comptage_exemples",
-    # "qwen3-6-35b-moe": "dictee_end2end_comptage_exemples",
-    # "gemma4-26b-moe": "dictee_end2end_exemples",
-}
-
-#: Libellé affiché pour chaque run promu, par son nom (la valeur de `MODELES_PROMUS`).
-LIBELLES_PROMOTION: dict[str, str] = {
-    "dictee_end2end_comptage_exemples": "end-to-end (comptage+exemples)",
-    "dictee_end2end_exemples": "end-to-end (exemples)",
+    "end-to-end": "end2end",
+    "two-stage": "two_stage",
 }
 
 #: Modèles retenus si la découverte automatique ne trouve rien (S3 injoignable,
 #: rendu hors ligne sans prédictions) : la page reste rendable et nomme ce qu'elle
 #: attend, au lieu d'afficher un sélecteur vide.
-MODELES_DEFAUT: list[str] = ["gemma4-26b-moe", "qwen3-6-35b-moe"]
+MODELES_DEFAUT: list[str] = ["qwen3-6-35b-moe"]
 
 #: Approche de référence quand une analyse exige un run unique (classement des
 #: pires copies, tri des items). Par défaut l'approche privilégiée du projet.
 APPROCHE_REFERENCE = os.environ.get("RESULTATS_APPROCHE_REFERENCE", "end-to-end")
 
+#: Prompt de référence des pages sans axe « prompt » (Écarts, Évaluation).
+PROMPT_REFERENCE = os.environ.get("RESULTATS_PROMPT_REFERENCE", PROMPT_BASE)
+
+#: Une configuration de corpus et de consigne : (année de la dictée, prompt).
+Config = tuple[int, str]
+
 
 def libelle_run(approche: str, modele: str) -> str:
     """Libellé d'un run croisant une approche et un modèle (clé des dictionnaires)."""
     return f"{approche} · {modele}"
+
+
+def libelle_config(config: Config) -> str:
+    """Libellé lisible d'une configuration, ex. `2015 · base`."""
+    return f"{config[0]} · {config[1]}"
 
 
 #: Chemin de la grille de codage (mots attendus, ordre de la dictée).
@@ -194,29 +187,22 @@ COULEURS_RUN = ["#c44536", "#0b7285", "#7b2d8b", "#946200"]
 Z95 = 1.96
 
 
-def couleur_run(approche: str, modele: str, modeles: list[str] | None = None) -> str:
-    """Couleur d'un run : teinte de l'approche, nuance du modèle.
+def couleur_run(approche: str, rang: int) -> str:
+    """Couleur d'un run : teinte de l'approche, nuance selon son rang.
+
+    Le rang est celui du modèle dans une comparaison de modèles, ou celui de la
+    configuration (année, prompt) dans la vue d'un modèle : la teinte dit toujours
+    l'approche, la nuance ce qui varie à l'intérieur de la vue.
 
     Args:
         approche: libellé d'approche (clé de `APPROCHES`).
-        modele: nom du modèle.
-        modeles: liste de référence fixant l'ordre des nuances. [défaut : `MODELES`]
+        rang: rang du run dans ce qui varie à approche fixée.
 
     Returns:
         La couleur hexadécimale du run.
     """
-    liste = modeles if modeles is not None else MODELES
-    rang_modele = liste.index(modele) if modele in liste else 0
-    nuances = NUANCES_APPROCHE.get(approche)
-    if nuances is None:
-        # Les libellés de promotion (LIBELLES_PROMOTION) sont inclus APRÈS ceux
-        # d'APPROCHES : sans ça, une approche promue retomberait sur le rang 0 par
-        # défaut et partagerait la couleur de « end-to-end » pour le même modèle.
-        approches_connues = [*APPROCHES, *LIBELLES_PROMOTION.values()]
-        largeur = len(approches_connues) or 1
-        rang_approche = approches_connues.index(approche) if approche in approches_connues else 0
-        return COULEURS_RUN[(rang_modele * largeur + rang_approche) % len(COULEURS_RUN)]
-    return nuances[rang_modele % len(nuances)]
+    nuances = NUANCES_APPROCHE.get(approche, COULEURS_RUN)
+    return nuances[rang % len(nuances)]
 
 
 def init_matplotlib() -> None:
@@ -404,47 +390,60 @@ def enregistrer_figure(fig, nom: str, legende: str = "") -> str:
 
 
 @contextmanager
-def vue_modele(modele: str, actif: str) -> Iterator[None]:
-    """Ouvre la vue d'un modèle : tout ce qui est imprimé dedans lui appartient.
+def vue_modele(cle: str, actif: str) -> Iterator[None]:
+    """Ouvre une vue « un modèle » : tout ce qui est imprimé dedans lui appartient.
 
     Args:
-        modele: modèle décrit par la vue.
-        actif: modèle sélectionné au chargement de la page (vue visible sans JS).
+        cle: clé de la vue (`Vue.cle`), lue par le JavaScript des menus.
+        actif: clé de la vue sélectionnée au chargement (visible sans JS).
     """
-    classes = ".vue-modele" + (" .vue-active" if modele == actif else "")
-    print(f'{FENCE_VUE} {{{classes} data-vue-modele="{html.escape(modele, quote=True)}"}}')
+    classes = ".vue-modele" + (" .vue-active" if cle == actif else "")
+    print(f'{FENCE_VUE} {{{classes} data-vue-modele="{html.escape(cle, quote=True)}"}}')
     yield
     print(FENCE_VUE)
+
+
+def cle_paire(config: Config, paire: tuple[str, str]) -> str:
+    """Clé d'une vue « paire de modèles » : configuration puis modèles."""
+    return f"{config[0]}|{config[1]}|{paire[0]}|{paire[1]}"
 
 
 @contextmanager
-def vue_paire(paire: tuple[str, str], actif: tuple[str, str] | None) -> Iterator[None]:
-    """Ouvre la vue d'une paire de modèles comparés.
+def vue_paire(cle: str, actif: str | None) -> Iterator[None]:
+    """Ouvre la vue d'une paire de modèles comparés, à configuration fixée.
 
     Args:
-        paire: couple (modèle A, modèle B), dans l'ordre de `MODELES`.
-        actif: paire sélectionnée au chargement de la page, ou None.
+        cle: clé de la vue (`cle_paire`).
+        actif: clé de la vue sélectionnée au chargement de la page, ou None.
     """
-    classes = ".vue-paire" + (" .vue-active" if paire == actif else "")
-    cle = html.escape("|".join(paire), quote=True)
-    print(f'{FENCE_VUE} {{{classes} data-vue-paire="{cle}"}}')
+    classes = ".vue-paire" + (" .vue-active" if cle == actif else "")
+    print(f'{FENCE_VUE} {{{classes} data-vue-paire="{html.escape(cle, quote=True)}"}}')
     yield
     print(FENCE_VUE)
 
 
-def _options(modeles: list[str], selection: str) -> str:
-    """Balises `<option>` d'un menu déroulant de modèles."""
+def _options(valeurs: list[str], selection: str, libelles: dict[str, str] | None = None) -> str:
+    """Balises `<option>` d'un menu déroulant."""
+    libelles = libelles or {}
     return "".join(
-        f'<option value="{html.escape(m, quote=True)}"'
-        f"{' selected' if m == selection else ''}>{html.escape(m)}"
-        f"{'' if len(approches_du_modele(m)) == len(APPROCHES) else ' (1 approche)'}"
-        "</option>"
-        for m in modeles
+        f'<option value="{html.escape(v, quote=True)}"'
+        f"{' selected' if v == selection else ''}>{html.escape(libelles.get(v, v))}</option>"
+        for v in valeurs
+    )
+
+
+def _menu(identifiant: str, libelle: str, classe: str, options: str) -> str:
+    """Un libellé et son menu déroulant."""
+    return (
+        f'<label for="{identifiant}">{libelle}</label>'
+        f'<select id="{identifiant}" class="{classe}">{options}</select>'
     )
 
 
 def selecteur_modele(modeles: list[str], selection: str, identifiant: str) -> str:
-    """Menu déroulant choisissant le modèle affiché par les vues « un modèle ».
+    """Menu déroulant simple choisissant un modèle (vues indexées par modèle).
+
+    Sert aux pages à configuration fixée (ex. « Publications DEPP », 2015).
 
     Args:
         modeles: modèles proposés, dans l'ordre d'affichage.
@@ -456,32 +455,92 @@ def selecteur_modele(modeles: list[str], selection: str, identifiant: str) -> st
     """
     return (
         f'<div class="selecteur-vue" data-modeles="{html.escape("|".join(modeles), quote=True)}">'
-        f'<label for="{identifiant}">Modèle affiché</label>'
-        f'<select id="{identifiant}" class="selecteur-modele">'
-        f"{_options(modeles, selection)}</select>"
-        '<span class="selecteur-aide">end-to-end vs two-stage, pour ce modèle</span>'
-        "</div>"
+        + _menu(identifiant, "Modèle affiché", "selecteur-modele", _options(modeles, selection))
+        + "</div>"
     )
 
 
-def selecteur_paire(modeles: list[str], selection: tuple[str, str]) -> str:
-    """Deux menus déroulants choisissant les deux modèles comparés entre eux.
+def selecteur_vues(vues: list[Vue], active: Vue) -> str:
+    """Menus choisissant la vue « un modèle » : mode, modèle, année et prompt(s).
+
+    Deux modes : comparer les **années** à prompt commun (une série par année et
+    par approche), ou comparer **deux prompts** sur une même année. Le JavaScript
+    (`js/vues-modeles.html`) compose la clé de la vue à partir des menus.
 
     Args:
-        modeles: modèles proposés, dans l'ordre d'affichage.
-        selection: paire sélectionnée au chargement.
+        vues: vues rendues dans la page.
+        active: vue sélectionnée au chargement.
 
     Returns:
-        Le HTML des deux menus, à `print()` dans une cellule `output: asis`.
+        Le HTML des menus, à `print()` dans une cellule `output: asis`.
     """
+    modeles = list(dict.fromkeys(v.modele for v in vues))
+    annees = [str(a) for a in ANNEES]
+    prompts_annees = list(dict.fromkeys(v.configs[0][1] for v in vues if v.mode == "annees"))
+    prompts = list(PROMPTS)
+    a_deux_prompts = any(v.mode == "prompts" for v in vues)
+    configs_a = active.configs[0]
+    configs_b = active.configs[-1]
+    modes = {
+        "annees": "les années, à prompt commun",
+        "prompts": "deux prompts, sur une année" + ("" if a_deux_prompts else " (aucun exporté)"),
+    }
+
+    def _cache(mode: str) -> str:
+        return "" if mode == active.mode else " hidden"
+
+    attribut_prompts = html.escape("|".join(prompts), quote=True)
+    return (
+        f'<div class="selecteur-vue selecteur-config" data-prompts="{attribut_prompts}">'
+        + _menu("selecteur-mode", "Comparer", "sel-mode", _options(list(modes), active.mode, modes))
+        + _menu("selecteur-modele", "Modèle", "sel-modele", _options(modeles, active.modele))
+        + f'<span class="sel-groupe" data-mode="annees"{_cache("annees")}>'
+        + _menu(
+            "selecteur-prompt",
+            "Prompt",
+            "sel-prompt",
+            _options(prompts_annees or prompts, configs_a[1]),
+        )
+        + "</span>"
+        + f'<span class="sel-groupe" data-mode="prompts"{_cache("prompts")}>'
+        + _menu("selecteur-annee", "Année", "sel-annee", _options(annees, str(configs_a[0])))
+        + _menu("selecteur-prompt-a", "Prompt A", "sel-prompt-a", _options(prompts, configs_a[1]))
+        + _menu("selecteur-prompt-b", "Prompt B", "sel-prompt-b", _options(prompts, configs_b[1]))
+        + "</span>"
+        + "</div>"
+    )
+
+
+def selecteur_paire(
+    configs: list[Config], modeles: list[str], config: Config, paire: tuple[str, str]
+) -> str:
+    """Menus choisissant la configuration (année · prompt) et les deux modèles comparés.
+
+    Args:
+        configs: configurations où au moins deux modèles sont exportés.
+        modeles: modèles proposés, dans l'ordre d'affichage.
+        config: configuration sélectionnée au chargement.
+        paire: paire sélectionnée au chargement.
+
+    Returns:
+        Le HTML des menus, à `print()` dans une cellule `output: asis`.
+    """
+    valeurs = [f"{a}|{p}" for a, p in configs]
+    libelles = {f"{a}|{p}": libelle_config((a, p)) for a, p in configs}
     return (
         f'<div class="selecteur-vue" data-modeles="{html.escape("|".join(modeles), quote=True)}">'
-        '<label for="selecteur-paire-a">Comparer</label>'
+        + _menu(
+            "selecteur-paire-config",
+            "Année · prompt",
+            "selecteur-paire-config",
+            _options(valeurs, f"{config[0]}|{config[1]}", libelles),
+        )
+        + '<label for="selecteur-paire-a">Comparer</label>'
         '<select id="selecteur-paire-a" class="selecteur-paire" data-role="a">'
-        f"{_options(modeles, selection[0])}</select>"
+        f"{_options(modeles, paire[0])}</select>"
         '<label for="selecteur-paire-b">à</label>'
         '<select id="selecteur-paire-b" class="selecteur-paire" data-role="b">'
-        f"{_options(modeles, selection[1])}</select>"
+        f"{_options(modeles, paire[1])}</select>"
         "</div>"
     )
 
@@ -503,6 +562,11 @@ class Run:
     df: pd.DataFrame
     copies: pd.DataFrame = field(repr=False)
     items: pd.DataFrame = field(repr=False)
+    annee: int = 0
+    prompt: str = ""
+    #: Libellé court dans une vue, où seul ce qui varie est nommé (ex.
+    #: `end-to-end · 2021`). Vide hors d'une vue : on retombe sur `approche`.
+    serie: str = ""
 
     @property
     def n_copies(self) -> int:
@@ -539,10 +603,8 @@ def _noms_exportes() -> list[str]:
     `load_predictions`, qui échouerait alors sur un fichier bien présent.
 
     Ce listing est volontairement NON récursif : les bras d'expérience (testés sur un
-    échantillon, cf. `scripts/rapport_bras.py`) sont exportés dans le sous-dossier
-    `predictions/experimentations/` (voir `scripts/export_predictions.py`), invisible
-    d'ici par construction. Un run n'alimente donc le site que s'il a été exporté au
-    niveau racine de `predictions/` — c'est-à-dire mené sur le corpus complet.
+    échantillon) sont exportés dans un sous-dossier `experimentations/`, invisible
+    d'ici par construction (décision D9).
 
     Returns:
         Les noms de runs (suffixe de modèle compris, `_predictions.jsonl` ôté),
@@ -565,120 +627,107 @@ def _noms_exportes() -> list[str]:
     return _EXPORTES
 
 
-def _run_du_modele(base: str, modele: str) -> str | None:
-    """Nom du run exporté qui croise une approche et un modèle, None s'il manque.
-
-    Deux formes sont acceptées, toutes deux produites par `run_output_name` :
-    `<base>_<modele>` (un seul modèle) et `<base>_<modele>_<modele_etape2>`
-    (two_stage dont l'étape 2 utilise un autre modèle). Le modèle demandé est
-    donc toujours celui de l'ÉTAPE 1.
-
-    Args:
-        base: champ `name` du run (ex. `dictee_end2end`).
-        modele: nom du modèle tel que servi sur llm.lab.
-
-    Returns:
-        Le nom du run exporté, ou None si aucun ne correspond.
-    """
-    attendu = f"{base}_{modele}"
-    candidats = [n for n in _noms_exportes() if n == attendu or n.startswith(f"{attendu}_")]
-    return candidats[0] if candidats else None
+#: Clé du catalogue : (année, prompt, libellé d'approche, modèle de l'étape 1).
+CleRun = tuple[int, str, str, str]
 
 
-def modeles_exportes() -> list[str]:
-    """Modèles pour lesquels au moins un run de scoring est exporté, triés.
+def catalogue() -> dict[CleRun, str]:
+    """Runs exportés, indexés par année, prompt, approche et modèle.
 
-    La liste des modèles affichés par le site est **déduite de S3** : tout run
-    exporté apparaît au rendu suivant, sans toucher au code. Le nom du modèle est
-    le suffixe du nom de run (`<base>_<modele>`, cf. `config.run_output_name`).
-
-    Le two-stage peut suffixer DEUX modèles (`<base>_<etape1>_<etape2>`) : un
-    suffixe dont un autre suffixe est le préfixe est donc ramené à ce préfixe,
-    c'est-à-dire au modèle de l'étape 1 — le seul axe de comparaison du site.
-
-    Un fichier promu (ex. `dictee_end2end_comptage_exemples_qwen3-8-27b`) est posé à
-    la racine de `predictions/`, là où ce listing cherche — et son nom COMMENCE par
-    `dictee_end2end_`, comme un run de référence. Sans exclusion explicite, il serait
-    lu comme le modèle fantôme `comptage_exemples_qwen3-8-27b` : chaque base connue de
-    `LIBELLES_PROMOTION` est donc écartée AVANT de chercher un modèle, pour qu'un nom
-    de run réservé à une promotion ne soit jamais confondu avec un modèle inconnu.
+    Tout est lu dans le nom du run (convention de `run_names.py`) : un nom qui ne
+    la suit pas — ancien run, bras d'expérience — est ignoré, jamais deviné. Un
+    two-stage dont l'étape 2 utilise un autre modèle est rangé sous le modèle de
+    l'étape 1 ; si deux runs se disputent la même clé, le premier (ordre
+    alphabétique) est retenu.
 
     Returns:
-        Les noms de modèles, par ordre alphabétique. Liste vide si le préfixe est
-        injoignable ou ne contient aucun run.
+        Le dictionnaire clé → nom du run exporté.
     """
-    bases_promotion = tuple(LIBELLES_PROMOTION)
-    suffixes = sorted(
-        {
-            nom[len(base) + 1 :]
-            for base in APPROCHES.values()
-            for nom in _noms_exportes()
-            if nom.startswith(base + "_") and not nom.startswith(bases_promotion)
-        }
+    approche_de = {segment: libelle for libelle, segment in APPROCHES.items()}
+    runs: dict[CleRun, str] = {}
+    for nom in _noms_exportes():
+        decompose = analyser_nom_run(nom)
+        if decompose is None or decompose.approche not in approche_de:
+            continue
+        cle = (decompose.annee, decompose.prompt, approche_de[decompose.approche], decompose.modele)
+        runs.setdefault(cle, nom)
+    return runs
+
+
+def _trier_prompts(prompts: set[str]) -> list[str]:
+    """Prompts triés, le prompt de base en tête."""
+    return sorted(prompts, key=lambda p: (p != PROMPT_BASE, p))
+
+
+#: Runs exportés, lus une fois au chargement du module.
+CATALOGUE: dict[CleRun, str] = catalogue()
+
+#: Années, prompts et modèles présents dans le catalogue, dans l'ordre d'affichage.
+ANNEES: list[int] = sorted({cle[0] for cle in CATALOGUE})
+PROMPTS: list[str] = _trier_prompts({cle[1] for cle in CATALOGUE}) or [PROMPT_BASE]
+
+#: Modèles comparés, dans l'ordre d'affichage. Un modèle non exporté est
+#: simplement omis, avec une note — on ne substitue JAMAIS un autre modèle, ce
+#: qui fausserait la comparaison. `RESULTATS_MODELES` force la liste ; sinon elle
+#: vient de S3.
+MODELES: list[str] = _liste_env(
+    "RESULTATS_MODELES", sorted({cle[3] for cle in CATALOGUE}) or MODELES_DEFAUT
+)
+
+
+def configs_du_modele(modele: str) -> list[Config]:
+    """Configurations (année, prompt) où le modèle a au moins un run exporté."""
+    return sorted(
+        {(a, p) for (a, p, _, m) in CATALOGUE if m == modele},
+        key=lambda c: (c[0], PROMPTS.index(c[1]) if c[1] in PROMPTS else len(PROMPTS)),
     )
-    modeles = [
-        next((autre for autre in suffixes if autre != s and s.startswith(autre + "_")), s)
-        for s in suffixes
-    ]
-    return sorted(dict.fromkeys(modeles))
 
 
-#: Modèles comparés, dans l'ordre d'affichage. Le benchmark suffixe TOUJOURS ses
-#: sorties par le nom du modèle (`<name>_<modele>_predictions.jsonl`, cf.
-#: `config.run_output_name`) : le site nomme donc le modèle pour retrouver le
-#: fichier. Un modèle non exporté est simplement omis, avec une note — on ne
-#: substitue JAMAIS un autre modèle, ce qui fausserait la comparaison.
-#: `RESULTATS_MODELES` force la liste ; sinon elle vient de S3.
-MODELES: list[str] = _liste_env("RESULTATS_MODELES", modeles_exportes() or MODELES_DEFAUT)
-
-
-def approches_du_modele(modele: str) -> list[str]:
-    """Approches CŒUR réellement exportées pour un modèle (end-to-end / two-stage).
-
-    Ne regarde QUE `APPROCHES`, jamais `MODELES_PROMUS` : c'est cette liste qui pilote
-    le message « comparaison end-to-end vs two-stage incomplète » et la sélection des
-    modèles complets (`MODELES_COMPLETS`). Un modèle non promu sur un prompt bonus
-    n'a AUCUNE raison d'être signalé incomplet pour autant — voir `approche_promue`
-    pour afficher la promotion à part, sans jamais la mélanger à ce calcul.
-    """
-    return [approche for approche, base in APPROCHES.items() if _run_du_modele(base, modele)]
-
-
-def approche_promue(modele: str) -> tuple[str, str] | None:
-    """Libellé et nom du run promu pour ce modèle, si déclaré ET réellement exporté.
-
-    Reste hors d'`APPROCHES`/`approches_du_modele` à dessein (voir leurs docstrings) :
-    la promotion est un bonus par modèle, pas une troisième approche que tout modèle
-    devrait couvrir pour être « complet ».
+def approches_du_modele(modele: str, config: Config | None = None) -> list[str]:
+    """Approches exportées pour un modèle, sur une configuration donnée.
 
     Args:
         modele: nom du modèle.
+        config: (année, prompt). [défaut : la configuration de référence]
 
     Returns:
-        Le couple (libellé affiché, nom du run), ou None si non promu dans
-        `MODELES_PROMUS`, ou promu mais introuvable sur S3 (run pas encore exporté).
+        Les libellés d'approche exportés, dans l'ordre d'`APPROCHES`.
     """
-    base = MODELES_PROMUS.get(modele)
-    if base is None:
-        return None
-    nom = _run_du_modele(base, modele)
-    if nom is None:
-        return None
-    return LIBELLES_PROMOTION.get(base, base), nom
+    annee, prompt = config or CONFIG_REFERENCE
+    return [a for a in APPROCHES if (annee, prompt, a, modele) in CATALOGUE]
 
 
-#: Modèles évalués sur les DEUX approches cœur (end-to-end + two-stage) : les seuls
-#: pour lesquels cette comparaison est complète. Ils sont préférés comme sélection
-#: par défaut, pour que la page s'ouvre sur une vue non tronquée. Une promotion
-#: (`MODELES_PROMUS`) n'entre PAS dans ce calcul, par construction : voir
-#: `approches_du_modele`.
+def _config_reference() -> Config:
+    """Configuration des pages sans axe « année · prompt » (Écarts, Évaluation).
+
+    L'année la plus récente où un modèle a les deux approches au prompt de
+    référence ; à défaut, la plus récente tout court. `RESULTATS_ANNEE_REFERENCE`
+    force l'année.
+    """
+    forcee = os.environ.get("RESULTATS_ANNEE_REFERENCE")
+    if forcee:
+        return int(forcee), PROMPT_REFERENCE
+    completes = [
+        a
+        for a in ANNEES
+        if any(all((a, PROMPT_REFERENCE, ap, m) in CATALOGUE for ap in APPROCHES) for m in MODELES)
+    ]
+    annees = completes or ANNEES
+    return (annees[-1] if annees else 0), PROMPT_REFERENCE
+
+
+CONFIG_REFERENCE: Config = _config_reference()
+
+#: Modèles évalués sur les DEUX approches à la configuration de référence : ils
+#: sont préférés comme sélection par défaut, pour que la page s'ouvre sur une
+#: vue non tronquée.
 MODELES_COMPLETS: list[str] = [
     modele for modele in MODELES if len(approches_du_modele(modele)) == len(APPROCHES)
 ]
 
 #: Modèle utilisé par les pages qui n'ont pas d'axe « modèle » (page « Écarts »,
 #: dont le détail copie par copie serait illisible multiplié par les modèles), et
-#: sélection initiale du menu déroulant de la page « Résultats ».
+#: sélection initiale des menus de la page « Résultats ».
 MODELE_REFERENCE = os.environ.get(
     "RESULTATS_MODELE_REFERENCE", (MODELES_COMPLETS or MODELES or [""])[0]
 )
@@ -701,19 +750,17 @@ def paires_modeles(modeles: list[str] | None = None) -> list[tuple[str, str]]:
     return [(a, b) for i, a in enumerate(liste) for b in liste[i + 1 :]]
 
 
-def _modele_du_run(df: pd.DataFrame, nom: str, base: str) -> str:
+def _modele_du_run(df: pd.DataFrame, nom: str) -> str:
     """Modèle(s) d'un run, lu dans les prédictions ou, à défaut, dans son nom.
 
     Les runs récents estampillent chaque ligne d'un `model` (et d'un
     `model_stage2` en two_stage) : c'est la source la plus fiable, et la seule
     qui distingue les deux étapes. Les runs plus anciens ne portent pas ces
-    colonnes — on retombe alors sur le suffixe du nom de fichier, posé par
-    `config.run_output_name`.
+    colonnes — on retombe alors sur le suffixe du nom de fichier.
 
     Args:
         df: prédictions du run.
         nom: nom du run (préfixe des fichiers de sortie).
-        base: champ `name` du run, à ôter du nom pour isoler le suffixe.
 
     Returns:
         Le modèle, sous la forme `<étape 1>` ou `<étape 1> → <étape 2>`.
@@ -724,60 +771,35 @@ def _modele_du_run(df: pd.DataFrame, nom: str, base: str) -> str:
         if "model_stage2" in df.columns and df["model_stage2"].notna().any():
             etape2 = str(df["model_stage2"].dropna().iloc[0])
         return etape1 if etape2 in ("", etape1) else f"{etape1} → {etape2}"
-    if nom.startswith(f"{base}_"):
-        return nom[len(base) + 1 :].replace("_", " → ")
-    return "—"
+    decompose = analyser_nom_run(nom)
+    return " → ".join(decompose.modeles) if decompose else "—"
 
 
-def runs_attendus(modeles: list[str] | None = None) -> dict[str, str]:
-    """Runs à afficher : libellé (approche × modèle) → nom de run attendu.
-
-    Args:
-        modeles: modèles à croiser avec les approches. [défaut : `MODELES`]
-
-    Returns:
-        Le dictionnaire des runs attendus, modèles en boucle interne pour que
-        les deux approches d'un même modèle restent voisines à l'affichage.
-    """
-    return {
-        libelle_run(approche, modele): f"{base}_{modele}"
-        for approche, base in APPROCHES.items()
-        for modele in (modeles if modeles is not None else MODELES)
-    }
-
-
-#: Runs déjà lus, indexés par (approche, modèle). La page « Résultats » affiche
-#: chaque modèle dans sa propre vue PUIS chaque paire de modèles : sans ce cache,
-#: le même JSONL serait relu sur S3 autant de fois qu'il apparaît dans une vue.
-_CACHE_RUNS: dict[tuple[str, str], Run | None] = {}
+#: Runs déjà lus, indexés comme le catalogue. La page « Résultats » affiche chaque
+#: run dans plusieurs vues : sans ce cache, le même JSONL serait relu sur S3
+#: autant de fois qu'il apparaît.
+_CACHE_RUNS: dict[CleRun, Run | None] = {}
 
 #: Copies écartées des métriques par run (motif -> nombre de copies), pour une note
 #: unique en bas de page plutôt qu'une ligne par run.
 _ECARTEES: dict[str, dict[str, int]] = {}
 
 
-def _charger_run(approche: str, base: str, modele: str, manquants: list[str]) -> Run | None:
-    """Charge un run (approche × modèle), en mémorisant lectures et échecs.
+def charger_run(cle: CleRun) -> Run | None:
+    """Charge un run du catalogue, en mémorisant lectures et échecs.
 
     Args:
-        approche: libellé d'approche (clé de `APPROCHES`).
-        base: champ `name` du run correspondant à l'approche.
-        modele: nom du modèle.
-        manquants: liste où consigner les runs non exportés, pour une note unique.
+        cle: (année, prompt, approche, modèle).
 
     Returns:
-        Le run chargé, ou None s'il est absent, vide ou illisible.
+        Le run chargé (libellé `approche · modèle`, nuance du modèle), ou None
+        s'il n'est pas exporté, vide ou illisible — l'incident est consigné.
     """
-    cle = (approche, modele)
     if cle in _CACHE_RUNS:
-        run = _CACHE_RUNS[cle]
-        if run is None and f"`{base}_{modele}`" not in manquants:
-            manquants.append(f"`{base}_{modele}`")
-        return run
+        return _CACHE_RUNS[cle]
     _CACHE_RUNS[cle] = None
-    nom = _run_du_modele(base, modele)
-    if nom is None:
-        manquants.append(f"`{base}_{modele}`")
+    nom = CATALOGUE.get(cle)
+    if nom is None or not PAQUET_OK:
         return None
     try:
         df = load_predictions(_chemin(nom))
@@ -796,22 +818,25 @@ def _charger_run(approche: str, base: str, modele: str, manquants: list[str]) ->
     if df.empty:
         NOTES.append(f"`{nom}` ne contient aucune copie évaluable : run omis.")
         return None
+    annee, prompt, approche, modele = cle
     _CACHE_RUNS[cle] = Run(
         label=libelle_run(approche, modele),
         nom=nom,
         approche=approche,
-        modele=_modele_du_run(df, nom, base),
+        modele=_modele_du_run(df, nom),
         modele_cle=modele,
-        couleur=couleur_run(approche, modele),
+        couleur=couleur_run(approche, MODELES.index(modele) if modele in MODELES else 0),
         df=df,
         copies=per_copy_metrics(df),
         items=per_item_metrics(df),
+        annee=annee,
+        prompt=prompt,
     )
     return _CACHE_RUNS[cle]
 
 
-def charger_runs(modeles: list[str] | None = None) -> dict[str, Run]:
-    """Charge les runs croisant chaque approche et chaque modèle demandé.
+def charger_runs(modeles: list[str] | None = None, config: Config | None = None) -> dict[str, Run]:
+    """Charge les runs croisant chaque approche et chaque modèle, à configuration fixée.
 
     Un modèle non exporté est **omis**, jamais remplacé par un autre : la page
     compare les modèles entre eux, une substitution silencieuse y attribuerait
@@ -819,58 +844,167 @@ def charger_runs(modeles: list[str] | None = None) -> dict[str, Run]:
 
     Args:
         modeles: modèles à charger. [défaut : `MODELES`, tous comparés]
+        config: (année, prompt). [défaut : `CONFIG_REFERENCE`]
 
     Returns:
-        Les runs chargés, indexés par libellé `approche · modèle`. Un run absent
-        ou illisible est omis et l'incident consigné dans `NOTES`.
+        Les runs chargés, indexés par libellé `approche · modèle`.
     """
-    if not PAQUET_OK:
-        return {}
-    demandes = modeles if modeles is not None else MODELES
+    annee, prompt = config or CONFIG_REFERENCE
     runs: dict[str, Run] = {}
-    manquants: list[str] = []
-    for approche, base in APPROCHES.items():
-        for modele in demandes:
-            run = _charger_run(approche, base, modele, manquants)
+    for approche in APPROCHES:
+        for modele in modeles if modeles is not None else MODELES:
+            run = charger_run((annee, prompt, approche, modele))
             if run is not None:
                 runs[run.label] = run
-    # Promotions (MODELES_PROMUS) : chargées À PART, jamais mêlées à la boucle
-    # ci-dessus. Un modèle non promu ne doit pas finir dans `manquants` au seul
-    # motif qu'il n'a pas de prompt bonus.
-    for modele in demandes:
-        promotion = approche_promue(modele)
-        if promotion is None:
-            continue
-        libelle, _nom = promotion
-        run = _charger_run(libelle, MODELES_PROMUS[modele], modele, manquants)
-        if run is not None:
-            runs[run.label] = run
-    if manquants:
+    return runs
+
+
+@dataclass(frozen=True)
+class Vue:
+    """Une vue « un modèle » : un modèle, et les configurations qu'elle confronte.
+
+    Chaque configuration (année, prompt) est déclinée sur les deux approches : une
+    vue « années » 2015 vs 2021 affiche donc quatre séries.
+    """
+
+    #: `annees` (prompt commun, une configuration par année) ou `prompts` (une
+    #: année, deux prompts).
+    mode: str
+    modele: str
+    configs: tuple[Config, ...]
+
+    @property
+    def cle(self) -> str:
+        """Clé de la vue, recomposée à l'identique par le JavaScript des menus."""
+        if self.mode == "annees":
+            return f"annees|{self.modele}|{self.configs[0][1]}"
+        (annee, prompt_a), (_, prompt_b) = self.configs
+        return f"prompts|{self.modele}|{annee}|{prompt_a}|{prompt_b}"
+
+    @property
+    def titre(self) -> str:
+        """Titre lisible, repris dans les légendes."""
+        if self.mode == "annees":
+            annees = " vs ".join(str(a) for a, _ in self.configs)
+            return f"{self.modele}, prompt {self.configs[0][1]}, {annees}"
+        (annee, prompt_a), (_, prompt_b) = self.configs
+        return f"{self.modele}, {annee}, prompt {prompt_a} vs {prompt_b}"
+
+    def serie(self, approche: str, config: Config) -> str:
+        """Libellé court d'une série : l'approche et ce qui varie dans la vue."""
+        varie = str(config[0]) if self.mode == "annees" else config[1]
+        return f"{approche} · {varie}"
+
+
+def vues_possibles(modeles: list[str] | None = None) -> list[Vue]:
+    """Vues « un modèle » ayant au moins un run exporté.
+
+    Mode `annees` : pour chaque modèle et chaque prompt, toutes les années du
+    catalogue. Mode `prompts` : pour chaque modèle et chaque année, chaque paire de
+    prompts exportés (dans l'ordre de `PROMPTS`).
+
+    Args:
+        modeles: modèles à décliner. [défaut : `MODELES`]
+
+    Returns:
+        Les vues, mode `annees` d'abord.
+    """
+    vues: list[Vue] = []
+    liste = modeles if modeles is not None else MODELES
+    for modele in liste:
+        configs = configs_du_modele(modele)
+        for prompt in PROMPTS:
+            if any(p == prompt for _, p in configs):
+                vues.append(Vue("annees", modele, tuple((a, prompt) for a in ANNEES)))
+    for modele in liste:
+        configs = configs_du_modele(modele)
+        for annee in ANNEES:
+            prompts = [p for p in PROMPTS if (annee, p) in configs]
+            for i, prompt_a in enumerate(prompts):
+                for prompt_b in prompts[i + 1 :]:
+                    vues.append(Vue("prompts", modele, ((annee, prompt_a), (annee, prompt_b))))
+    return vues
+
+
+def runs_de_vue(vue: Vue) -> dict[str, Run]:
+    """Runs d'une vue, groupés par approche puis par configuration.
+
+    Chaque run est une copie de celui du cache, renommée pour la vue : un libellé
+    unique dans la page (`approche · modèle · année · prompt`), un libellé court
+    (`serie`) et une couleur dont la teinte dit l'approche et la nuance la
+    configuration.
+
+    Args:
+        vue: la vue à remplir.
+
+    Returns:
+        Les runs exportés de la vue, indexés par libellé unique.
+    """
+    runs: dict[str, Run] = {}
+    for approche in APPROCHES:
+        for rang, config in enumerate(vue.configs):
+            run = charger_run((config[0], config[1], approche, vue.modele))
+            if run is None:
+                continue
+            label = f"{run.label} · {libelle_config(config)}"
+            runs[label] = replace(
+                run,
+                label=label,
+                serie=vue.serie(approche, config),
+                couleur=couleur_run(approche, rang),
+            )
+    return runs
+
+
+def series_absentes(vue: Vue, runs: dict[str, Run]) -> list[str]:
+    """Séries attendues dans une vue (configuration × approche) mais non exportées."""
+    presentes = {r.serie for r in runs.values()}
+    return [
+        vue.serie(approche, config)
+        for approche in APPROCHES
+        for config in vue.configs
+        if vue.serie(approche, config) not in presentes
+    ]
+
+
+def configs_comparables() -> list[Config]:
+    """Configurations (année, prompt) où au moins deux modèles sont exportés."""
+    return [
+        (a, p)
+        for a in ANNEES
+        for p in PROMPTS
+        if len({m for (aa, pp, _, m) in CATALOGUE if (aa, pp) == (a, p) and m in MODELES}) >= 2
+    ]
+
+
+def note_chargement() -> None:
+    """Consigne dans `NOTES` ce que le lecteur doit savoir du chargement."""
+    ignores = [n for n in _noms_exportes() if analyser_nom_run(n) is None]
+    if ignores:
         NOTES.append(
-            f"Non exporté(s), donc absent(s) des comparaisons : {', '.join(manquants)}. "
-            "Lancer le run puis `uv run scripts/export_predictions.py --config … "
-            "--model-name <modèle>`. Runs disponibles sous "
-            f"`{PREFIX}` : {', '.join(f'`{n}`' for n in _noms_exportes()) or 'aucun'}."
+            "Runs présents sous `" + PREFIX + "` mais ignorés, faute de suivre la convention "
+            "`dictee<AAAA>_<approche>_<prompt>_<modele>` : "
+            + ", ".join(f"`{n}`" for n in ignores)
+            + "."
         )
-    if not runs:
+    if not CATALOGUE:
         NOTES.append(
             "Aucun run n'a pu être chargé. Vérifier `S3_PREDICTIONS_PREFIX` et "
-            "l'export (`uv run scripts/export_predictions.py --config …`)."
+            "l'export (`uv run scripts/export_predictions.py --config … --prompt …`)."
         )
     if _ECARTEES:
-        total = {}
+        total: dict[str, int] = {}
         for motifs in _ECARTEES.values():
             for motif, n in motifs.items():
                 total[motif] = max(total.get(motif, 0), n)
         detail = ", ".join(f"{n} {motif}(s)" for motif, n in sorted(total.items()))
         NOTES.append(
-            f"Copies écartées des métriques : {detail} (par run). Une copie **vierge** "
-            "est codée « absent » sans appel modèle, et un item **illisible** (code "
-            "expert « i ») n'a reçu aucun jugement auquel comparer le modèle : les "
+            f"Copies écartées des métriques : jusqu'à {detail} selon le run. Une copie "
+            "**vierge** est codée « absent » sans appel modèle, et un item **illisible** "
+            "(code expert « i ») n'a reçu aucun jugement auquel comparer le modèle : les "
             "compter lui imputerait un défaut de numérisation ou d'annotation. Les "
             "inclure surestimait le kappa d'environ 0,02. Voir la décision D8."
         )
-    return runs
 
 
 def restreindre_corpus_commun(runs: dict[str, Run]) -> tuple[dict[str, Run], int]:
@@ -1254,15 +1388,19 @@ def couverture_copies(runs: dict[str, Run]) -> pd.DataFrame:
     Args:
         runs: runs chargés par `charger_runs`.
 
+    Le corpus de référence est l'union des copies vues par les runs de la MÊME
+    année : les dictées 2015 et 2021 sont deux corpus distincts.
+
     Returns:
         Un DataFrame indexé par libellé de run : nombre de copies évaluées,
-        nombre et part de copies du corpus (union des runs) non couvertes.
+        nombre et part de copies du corpus (union des runs de l'année) non couvertes.
     """
-    corpus = set()
+    corpus_annee: dict[int, set[str]] = {}
     for run in runs.values():
-        corpus |= set(run.df["copy_id"].unique())
+        corpus_annee.setdefault(run.annee, set()).update(run.df["copy_id"].unique())
     lignes = []
     for label, run in runs.items():
+        corpus = corpus_annee[run.annee]
         vues = set(run.df["copy_id"].unique())
         lignes.append(
             {
@@ -1511,8 +1649,11 @@ def legende_puces() -> str:
 __all__ = [
     "agreement_per_item",
     "confidence_score",
+    "consensus_levels",
     "disagreement_decomposition",
     "disagreement_type_summary",
+    "fleiss_kappa",
+    "pairwise_agreement",
     "referral_curve_with_ci",
     "wilson_interval",
 ]

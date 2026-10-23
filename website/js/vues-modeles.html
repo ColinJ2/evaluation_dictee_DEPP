@@ -1,24 +1,36 @@
 <!--
-  Menus déroulants de la page « Résultats ».
+  Menus déroulants des pages « Résultats » et « Publications DEPP ».
 
-  La page rend une vue par modèle (`.vue-modele[data-vue-modele]`) et une vue par
-  paire de modèles (`.vue-paire[data-vue-paire="A|B"]`) ; seule la vue portant
+  Trois familles de vues, rendues en entier au rendu ; seule la vue portant
   `.vue-active` est visible (CSS dans `style/styles.scss`). Ce script déplace
   cette classe au gré des menus, sans rechargement.
 
-  Sans JavaScript, la vue active initiale — posée au rendu par `_analyse.vue_modele`
-  et `_analyse.vue_paire` — reste affichée : la page garde du sens, avec le modèle
-  de référence.
+  1. Vues « un modèle » de la page Résultats (`.vue-modele[data-vue-modele]`) :
+     la clé se compose à partir des menus `.selecteur-config` —
+       `annees|<modèle>|<prompt>`                       (années comparées)
+       `prompts|<modèle>|<année>|<prompt A>|<prompt B>` (prompts comparés)
+     identique à `Vue.cle` dans `_analyse.py`. Une combinaison sans vue affiche
+     `.vue-modele-absente`.
+  2. Vues « un modèle » simples (page Publications DEPP) : menu
+     `select.selecteur-modele`, la clé est le nom du modèle.
+  3. Vues « paire de modèles » (`.vue-paire[data-vue-paire]`) : clé
+     `<année>|<prompt>|<modèle A>|<modèle B>` (`_analyse.cle_paire`), modèles
+     dans l'ordre de la page. Deux fois le même modèle affiche
+     `.vue-paire-identique` ; une paire non exportée, `.vue-paire-absente`.
 
-  Le choix est mémorisé dans `localStorage` et reflété dans l'URL (`?modele=…`,
-  `?a=…&b=…`), pour qu'un lien pointe sur un modèle précis.
+  Sans JavaScript, les vues actives posées au rendu restent affichées : la page
+  garde du sens, avec la configuration de référence.
+
+  Le choix est mémorisé dans `localStorage` et reflété dans l'URL, pour qu'un
+  lien pointe sur une vue précise.
 -->
 <script>
 (function () {
   "use strict";
 
+  var CLE_CONFIG = "resultats.vue";
   var CLE_MODELE = "resultats.modele";
-  var CLE_PAIRE = "resultats.paire";
+  var CLE_PAIRE = "resultats.paire-config";
 
   function lireMemoire(cle) {
     try { return window.localStorage.getItem(cle); } catch (e) { return null; }
@@ -56,26 +68,97 @@
     document.documentElement.style.setProperty("--hauteur-entete", hauteur + "px");
   }
 
+  function tous(selecteur) {
+    return Array.prototype.slice.call(document.querySelectorAll(selecteur));
+  }
+
+  /** Active la vue dont l'attribut vaut `valeur` ; renvoie vrai si elle existe. */
   function activer(vues, attribut, valeur) {
     var trouvee = false;
     vues.forEach(function (vue) {
-      var actif = vue.getAttribute(attribut) === valeur;
+      var actif = valeur !== null && vue.getAttribute(attribut) === valeur;
       vue.classList.toggle("vue-active", actif);
       trouvee = trouvee || actif;
     });
     return trouvee;
   }
 
-  document.addEventListener("DOMContentLoaded", function () {
-    majHauteurEntete();
-    window.addEventListener("resize", majHauteurEntete);
+  /** Sélectionne `valeur` dans un menu si elle y figure ; renvoie vrai sinon faux. */
+  function choisirOption(menu, valeur) {
+    if (!menu || valeur === null || valeur === undefined) { return false; }
+    var existe = Array.prototype.some.call(menu.options, function (o) { return o.value === valeur; });
+    if (existe) { menu.value = valeur; }
+    return existe;
+  }
 
-    var conteneur = document.querySelector(".selecteur-vue[data-modeles]");
-    var ordre = conteneur ? conteneur.getAttribute("data-modeles").split("|") : [];
+  // ── 1. Vues « un modèle » composées (page Résultats) ──────────────────────
+  function initialiserConfig() {
+    var conteneur = document.querySelector(".selecteur-config");
+    if (!conteneur) { return; }
+    var q = function (classe) { return conteneur.querySelector("select." + classe); };
+    var menuMode = q("sel-mode");
+    var menuModele = q("sel-modele");
+    var menuPrompt = q("sel-prompt");
+    var menuAnnee = q("sel-annee");
+    var menuPromptA = q("sel-prompt-a");
+    var menuPromptB = q("sel-prompt-b");
+    var groupes = Array.prototype.slice.call(conteneur.querySelectorAll(".sel-groupe"));
+    var ordrePrompts = (conteneur.getAttribute("data-prompts") || "").split("|");
+    var vues = tous(".vue-modele[data-vue-modele]");
+    var absente = document.querySelector(".vue-modele-absente");
 
-    // ── Vues « un modèle » ───────────────────────────────────────────────────
-    var menus = Array.prototype.slice.call(document.querySelectorAll("select.selecteur-modele"));
-    var vues = Array.prototype.slice.call(document.querySelectorAll(".vue-modele"));
+    /** Clé de la vue désignée par les menus (prompts A/B dans l'ordre de la page). */
+    function cleCourante() {
+      var modele = menuModele.value;
+      if (menuMode.value === "annees") {
+        return "annees|" + modele + "|" + menuPrompt.value;
+      }
+      var a = menuPromptA.value;
+      var b = menuPromptB.value;
+      if (a === b) { return null; }
+      if (ordrePrompts.indexOf(a) > ordrePrompts.indexOf(b)) { var t = a; a = b; b = t; }
+      return "prompts|" + modele + "|" + menuAnnee.value + "|" + a + "|" + b;
+    }
+
+    function appliquer(memoriser) {
+      groupes.forEach(function (g) { g.hidden = g.getAttribute("data-mode") !== menuMode.value; });
+      var cle = cleCourante();
+      var trouvee = activer(vues, "data-vue-modele", cle);
+      if (absente) { absente.classList.toggle("vue-active", !trouvee); }
+      if (memoriser && cle) {
+        ecrireMemoire(CLE_CONFIG, cle);
+        majUrl({ vue: cle });
+      }
+    }
+
+    /** Positionne les menus d'après une clé de vue (URL ou mémoire). */
+    function restaurer(cle) {
+      var morceaux = (cle || "").split("|");
+      if (morceaux[0] === "annees" && morceaux.length === 3) {
+        return choisirOption(menuMode, "annees") && choisirOption(menuModele, morceaux[1])
+          && choisirOption(menuPrompt, morceaux[2]);
+      }
+      if (morceaux[0] === "prompts" && morceaux.length === 5) {
+        return choisirOption(menuMode, "prompts") && choisirOption(menuModele, morceaux[1])
+          && choisirOption(menuAnnee, morceaux[2]) && choisirOption(menuPromptA, morceaux[3])
+          && choisirOption(menuPromptB, morceaux[4]);
+      }
+      return false;
+    }
+
+    [menuMode, menuModele, menuPrompt, menuAnnee, menuPromptA, menuPromptB].forEach(function (menu) {
+      if (menu) { menu.addEventListener("change", function () { appliquer(true); }); }
+    });
+
+    var initial = parametre("vue") || lireMemoire(CLE_CONFIG);
+    if (initial && restaurer(initial)) { appliquer(false); }
+  }
+
+  // ── 2. Vues « un modèle » simples (page Publications DEPP) ────────────────
+  function initialiserModele() {
+    var menus = tous("select.selecteur-modele");
+    var vues = tous(".vue-modele[data-vue-modele]");
+    if (!menus.length) { return; }
 
     function choisirModele(valeur, memoriser) {
       if (!activer(vues, "data-vue-modele", valeur)) { return; }
@@ -89,49 +172,59 @@
     menus.forEach(function (menu) {
       menu.addEventListener("change", function () { choisirModele(menu.value, true); });
     });
+    var initial = parametre("modele") || lireMemoire(CLE_MODELE);
+    if (initial) { choisirModele(initial, false); }
+  }
 
-    if (menus.length) {
-      var initial = parametre("modele") || lireMemoire(CLE_MODELE);
-      if (initial) { choisirModele(initial, false); }
-    }
-
-    // ── Vues « paire de modèles » ────────────────────────────────────────────
+  // ── 3. Vues « paire de modèles » ───────────────────────────────────────────
+  function initialiserPaires() {
+    var menuConfig = document.querySelector("select.selecteur-paire-config");
     var menuA = document.querySelector("select.selecteur-paire[data-role='a']");
     var menuB = document.querySelector("select.selecteur-paire[data-role='b']");
-    var paires = Array.prototype.slice.call(document.querySelectorAll(".vue-paire"));
+    if (!menuA || !menuB) { return; }
+    var conteneur = menuA.closest(".selecteur-vue");
+    var ordre = conteneur ? (conteneur.getAttribute("data-modeles") || "").split("|") : [];
+    var paires = tous(".vue-paire[data-vue-paire]");
     var identiques = document.querySelector(".vue-paire-identique");
+    var absente = document.querySelector(".vue-paire-absente");
 
-    /** Clé d'une paire, normalisée dans l'ordre des modèles de la page. */
-    function cle(a, b) {
-      return ordre.indexOf(a) <= ordre.indexOf(b) ? a + "|" + b : b + "|" + a;
+    /** Clé d'une paire, modèles normalisés dans l'ordre de la page. */
+    function cle(config, a, b) {
+      var modeles = ordre.indexOf(a) <= ordre.indexOf(b) ? a + "|" + b : b + "|" + a;
+      return config + "|" + modeles;
     }
 
     function choisirPaire(memoriser) {
-      if (!menuA || !menuB) { return; }
+      var config = menuConfig ? menuConfig.value : "";
       var a = menuA.value;
       var b = menuB.value;
       var meme = a === b;
+      var trouvee = activer(paires, "data-vue-paire", meme ? null : cle(config, a, b));
       if (identiques) { identiques.classList.toggle("vue-active", meme); }
-      activer(paires, "data-vue-paire", meme ? "" : cle(a, b));
+      if (absente) { absente.classList.toggle("vue-active", !meme && !trouvee); }
       if (memoriser) {
-        ecrireMemoire(CLE_PAIRE, a + "|" + b);
-        majUrl({ a: a, b: b });
+        ecrireMemoire(CLE_PAIRE, config + "|" + a + "|" + b);
+        majUrl({ paire: config + "|" + a + "|" + b });
       }
     }
 
-    if (menuA && menuB) {
-      [menuA, menuB].forEach(function (menu) {
-        menu.addEventListener("change", function () { choisirPaire(true); });
-      });
-      var memoire = (lireMemoire(CLE_PAIRE) || "").split("|");
-      var a0 = parametre("a") || memoire[0];
-      var b0 = parametre("b") || memoire[1];
-      if (a0 && b0 && ordre.indexOf(a0) !== -1 && ordre.indexOf(b0) !== -1) {
-        menuA.value = a0;
-        menuB.value = b0;
-        choisirPaire(false);
-      }
+    [menuConfig, menuA, menuB].forEach(function (menu) {
+      if (menu) { menu.addEventListener("change", function () { choisirPaire(true); }); }
+    });
+    var memoire = (parametre("paire") || lireMemoire(CLE_PAIRE) || "").split("|");
+    if (memoire.length === 4
+        && (!menuConfig || choisirOption(menuConfig, memoire[0] + "|" + memoire[1]))
+        && choisirOption(menuA, memoire[2]) && choisirOption(menuB, memoire[3])) {
+      choisirPaire(false);
     }
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    majHauteurEntete();
+    window.addEventListener("resize", majHauteurEntete);
+    initialiserConfig();
+    initialiserModele();
+    initialiserPaires();
   });
 })();
 </script>

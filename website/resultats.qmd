@@ -11,11 +11,11 @@ include-after-body: js/vues-modeles.html
 # local) et on recalcule chiffres et figures à la volée — aucun pipeline n'est
 # réexécuté au rendu. Voir `website/_analyse.py`.
 #
-# La page est MODULABLE : la liste des modèles est déduite des runs exportés, et
-# chaque modèle a sa propre vue, rendue en entier puis montrée ou cachée par le
-# menu déroulant (`website/js/vues-modeles.html`). La comparaison end-to-end vs
-# two-stage est donc toujours à l'écran, pour le modèle choisi ; la comparaison
-# entre modèles a sa propre zone, avec deux menus.
+# La page est MODULABLE : années, prompts et modèles sont lus dans les noms des
+# runs exportés (convention de `run_names.py`). Chaque vue — un modèle, et deux
+# configurations (année, prompt) déclinées sur les deux approches — est rendue en
+# entier puis montrée ou cachée par les menus (`website/js/vues-modeles.html`).
+# La comparaison entre modèles a sa propre zone, à configuration fixée.
 import sys
 
 sys.path.insert(0, ".")
@@ -31,27 +31,50 @@ A.init_matplotlib()
 
 ITEMS, MOTS, RANGS = A.charger_grille()
 
-#: Runs de chaque modèle, indexés par modèle puis par libellé `approche · modèle`.
-#: Un modèle dont aucun run n'est lisible est retiré du menu : proposer une vue
-#: vide vaudrait moins que ne pas la proposer.
-VUES = {modele: A.charger_runs(modeles=[modele]) for modele in A.MODELES}
-VUES = {modele: runs for modele, runs in VUES.items() if runs}
+#: Vues « un modèle », indexées par clé, avec leurs runs (jusqu'à quatre : deux
+#: configurations × deux approches). Une vue dont aucun run n'est lisible est
+#: retirée : proposer une vue vide vaudrait moins que ne pas la proposer.
+VUES_DEF = {vue.cle: vue for vue in A.vues_possibles()}
+VUES = {cle: A.runs_de_vue(vue) for cle, vue in VUES_DEF.items()}
+VUES = {cle: runs for cle, runs in VUES.items() if runs}
+VUES_DEF = {cle: VUES_DEF[cle] for cle in VUES}
 
-MODELES = list(VUES)
-#: Modèle affiché à l'ouverture de la page (et sans JavaScript).
-MODELE_ACTIF = (
-    A.MODELE_REFERENCE if A.MODELE_REFERENCE in MODELES else (MODELES[0] if MODELES else "")
+MODELES = list(dict.fromkeys(vue.modele for vue in VUES_DEF.values()))
+#: Vue affichée à l'ouverture de la page (et sans JavaScript) : le modèle de
+#: référence, années comparées au prompt de référence.
+CLE_ACTIVE = next(
+    (
+        cle
+        for cle, vue in VUES_DEF.items()
+        if vue.mode == "annees"
+        and vue.modele == A.MODELE_REFERENCE
+        and vue.configs[0][1] == A.PROMPT_REFERENCE
+    ),
+    next(iter(VUES), ""),
 )
 
 #: Tous les runs confondus : sert aux dénominateurs qui doivent rester
 #: identiques d'une vue à l'autre (corpus de référence de la couverture).
 TOUS = {label: r for runs in VUES.values() for label, r in runs.items()}
 
-#: Paires de modèles proposées par la zone de comparaison, et paire initiale.
-PAIRES = A.paires_modeles(MODELES)
-PAIRE_ACTIVE = next(
-    (p for p in PAIRES if p[0] == MODELE_ACTIF), PAIRES[0] if PAIRES else None
+#: Zone « deux modèles » : configurations (année, prompt) où au moins deux modèles
+#: sont exportés, et runs de chaque modèle pour chacune.
+CONFIGS_PAIRES = A.configs_comparables()
+PAR_CONFIG = {
+    config: {modele: A.charger_runs(modeles=[modele], config=config) for modele in A.MODELES}
+    for config in CONFIGS_PAIRES
+}
+#: Vues « paire » : (configuration, paire de modèles exportés sur cette configuration).
+PAIRES = [
+    (config, paire)
+    for config in CONFIGS_PAIRES
+    for paire in A.paires_modeles([m for m in A.MODELES if PAR_CONFIG[config][m]])
+]
+_PAIRE_INITIALE = next(
+    (cp for cp in PAIRES if A.MODELE_REFERENCE in cp[1]), PAIRES[0] if PAIRES else None
 )
+PAIRE_ACTIVE = A.cle_paire(*_PAIRE_INITIALE) if _PAIRE_INITIALE else None
+A.note_chargement()
 
 CACHE_SYNTHESES: dict[tuple[str, int], pd.DataFrame] = {}
 
@@ -62,15 +85,15 @@ def synthese(run):
     La clé porte l'effectif de copies en plus du libellé : un run restreint au
     corpus commun d'une paire est un autre jeu de chiffres que le run complet.
     """
-    cle = (run.label, run.n_copies)
+    cle = (run.nom, run.n_copies)
     if cle not in CACHE_SYNTHESES:
         CACHE_SYNTHESES[cle] = A.synthese_globale(run.df)
     return CACHE_SYNTHESES[cle]
 
 
-def runs_paire(paire):
+def runs_paire(config, paire):
     """Runs des deux modèles d'une paire, groupés par approche puis par modèle."""
-    runs = {**VUES.get(paire[0], {}), **VUES.get(paire[1], {})}
+    runs = {**PAR_CONFIG[config][paire[0]], **PAR_CONFIG[config][paire[1]]}
     rang_approche = {approche: i for i, approche in enumerate(A.APPROCHES)}
     return dict(
         sorted(
@@ -87,20 +110,24 @@ if MODELES:
     print('::: {.callout-note appearance="simple"}')
     print("**Tous les chiffres et figures de cette page sont recalculés au rendu**")
     print("à partir des prédictions exportées (voir la commande d'export en bas de")
-    print("page). La liste des modèles est **déduite des runs présents sur S3** :")
-    print("un nouveau modèle exporté apparaît dans les menus au rendu suivant,")
-    print("sans modifier le site.")
+    print("page). Années, prompts et modèles sont **lus dans le nom des runs")
+    print("présents sur S3** (`dictee<année>_<approche>_<prompt>_<modèle>`) : un")
+    print("run exporté apparaît dans les menus au rendu suivant, sans modifier le site.")
     print("")
     print("La page se lit à deux niveaux :")
     print("")
-    print("1. **Un modèle à la fois** — le menu *Modèle affiché* choisit lequel ;")
-    print("   chaque tableau et chaque figure y comparent **end-to-end et")
-    print("   two-stage** pour ce modèle.")
+    print("1. **Un modèle à la fois** — les menus choisissent le modèle et ce qu'on")
+    print("   compare : les **années** à prompt commun, ou **deux prompts** sur une")
+    print("   même année. Chaque tableau et chaque figure déclinent ces deux")
+    print("   configurations sur les deux approches (**end-to-end** et **two-stage**),")
+    print("   soit jusqu'à quatre séries.")
     print("2. **Deux modèles entre eux** — la zone")
     print("   [Comparaison de deux modèles](#comparaison-de-deux-modeles) a ses")
-    print("   propres menus, et compare à **corpus commun**.")
+    print("   propres menus, et compare à **corpus commun**, année et prompt fixés.")
     print("")
-    print(f"Modèles disponibles : {', '.join(f'`{m}`' for m in MODELES)}.")
+    print(f"Modèles : {', '.join(f'`{m}`' for m in MODELES)}. ")
+    print(f"Années : {', '.join(str(a) for a in A.ANNEES)}. ")
+    print(f"Prompts : {', '.join(f'`{p}`' for p in A.PROMPTS)}.")
     note = A.note_codes_non_standard(TOUS)
     if note:
         print(f"\n{note}")
@@ -151,16 +178,33 @@ modèles testés.
 
 # Un modèle à la fois {#un-modele-a-la-fois}
 
-Le menu ci-dessous choisit le modèle décrit par **toute cette partie** : chaque
-tableau et chaque figure y confrontent l'**end-to-end** et le **two-stage** de ce
-seul modèle. Le choix est mémorisé et se retrouve dans l'URL (`?modele=…`), pour
-qu'un lien pointe directement sur un modèle.
+Les menus ci-dessous choisissent ce que décrit **toute cette partie** : un modèle,
+et deux configurations confrontées — les **années** 2015 et 2021 à prompt commun,
+ou **deux prompts** sur une même année. Chaque configuration est déclinée sur les
+deux approches : **end-to-end** (teinte rouge) et **two-stage** (teinte bleue),
+la nuance distinguant l'année ou le prompt. Le choix est mémorisé et se retrouve
+dans l'URL, pour qu'un lien pointe directement sur une vue.
+
+Comparer deux **années** compare deux corpus d'élèves différents : un écart peut
+venir du modèle comme des copies elles-mêmes (niveau des élèves, qualité des
+scans). Comparer deux **prompts** sur la même année porte, lui, sur les mêmes
+copies.
 
 ```{python}
 #| echo: false
 #| output: asis
 if MODELES:
-    print(A.selecteur_modele(MODELES, MODELE_ACTIF, "selecteur-modele-haut"))
+    print(A.selecteur_vues(list(VUES_DEF.values()), VUES_DEF[CLE_ACTIVE]))
+    # Vue affichée quand les menus désignent une combinaison sans aucun run
+    # exporté (ou deux fois le même prompt) : le dire vaut mieux qu'une page vide.
+    print(f"\n{A.FENCE_VUE} {{.vue-modele-absente}}")
+    print('::: {.callout-note appearance="simple"}')
+    print("**Aucun run exporté pour cette combinaison.** Pour comparer deux prompts,")
+    print("choisir deux prompts **différents** déjà exportés pour ce modèle et cette")
+    print("année. Un prompt s'ajoute en lançant un run sur le corpus complet, puis en")
+    print("l'exportant avec `--prompt <nom>` (voir [en bas de page](#ajouter-un-modele)).")
+    print(":::")
+    print(A.FENCE_VUE)
 ```
 
 ```{python}
@@ -168,35 +212,36 @@ if MODELES:
 #| output: asis
 # Effectifs du modèle affiché : le lecteur doit savoir sur quoi portent les
 # chiffres qu'il regarde, sans changer de vue.
-for modele, runs in VUES.items():
-    with A.vue_modele(modele, MODELE_ACTIF):
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
         effectifs = "\n".join(
-            f"- **{r.approche}** — modèle `{r.modele}` — {A.milliers(r.n_copies)} copies × "
+            f"- **{r.serie}** — modèle `{r.modele}` — {A.milliers(r.n_copies)} copies × "
             f"{r.df['item_id'].nunique()} items (`{r.nom}`)"
             for r in runs.values()
         )
-        print(f'::: {{.callout-note appearance="simple" title="Runs du modèle `{modele}`"}}')
+        print(f'::: {{.callout-note appearance="simple" title="Runs affichés — {modele}"}}')
         print(effectifs)
-        if len(runs) < len(A.APPROCHES):
-            absentes = [a for a in A.APPROCHES if a not in {r.approche for r in runs.values()}]
+        absentes = A.series_absentes(VUES_DEF[cle], runs)
+        if absentes:
             print(
-                f"\n**Approche(s) non exportée(s) pour ce modèle : "
-                f"{', '.join(absentes)}.** La comparaison end-to-end vs two-stage "
-                "est donc incomplète ici."
+                f"\n**Série(s) non exportée(s) : {', '.join(absentes)}.** Les tableaux "
+                "et figures ci-dessous ne montrent que les séries disponibles."
             )
         print(":::")
 ```
 
 ## Synthèse — codage de la dictée {#synthese-codage-de-la-dictee}
 
-Une colonne par **approche**, pour le modèle choisi ci-dessus. Le nom de chaque
+Une colonne par **série** (approche × année ou prompt), pour la vue choisie ci-dessus. Le nom de chaque
 métrique renvoie à sa définition et à sa formule sur la page
 [Évaluation & métriques](evaluation.qmd), qui donne aussi le **sens de lecture**
 (faut-il viser haut ou bas ?).
 
 Les **intervalles de confiance à 95 %** entre crochets sont corrigés de la
-**structure en grappes** des données : les observations ne sont pas 290 000 items
-isolés mais 83 items × 3 469 copies, et les items d'une même copie se ressemblent
+**structure en grappes** des données : les observations ne sont pas des centaines
+de milliers d'items isolés mais 83 items par copie, sur 3 469 copies en 2015 et
+6 793 en 2021, et les items d'une même copie se ressemblent
 puisqu'ils ont été écrits par le même élève. Sans cette correction, ils seraient
 deux à trois fois trop étroits — voir
 [intervalles de confiance et structure en grappes](evaluation.qmd#intervalles).
@@ -209,8 +254,9 @@ deux à trois fois trop étroits — voir
 # selon le modèle affiché.
 COUVERTURE = A.couverture_copies(TOUS) if TOUS else pd.DataFrame()
 
-for modele, runs in VUES.items():
-    with A.vue_modele(modele, MODELE_ACTIF):
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
         premiere = synthese(next(iter(runs.values())))
         lignes = []
         for metrique, ligne in premiere.iterrows():
@@ -249,9 +295,9 @@ for modele, runs in VUES.items():
         )
         print(
             A.table_markdown(
-                ["Métrique", *(r.approche for r in runs.values())],
+                ["Métrique", *(r.serie for r in runs.values())],
                 lignes,
-                f"Codage de la dictée par `{modele}` : une colonne par approche, "
+                f"Codage de la dictée — {modele} : une colonne par série, "
                 "IC 95 % entre crochets",
             )
         )
@@ -259,7 +305,7 @@ for modele, runs in VUES.items():
         ecartees = [label for label in runs if COUVERTURE.loc[label, "n_ecartees"] > 0]
         if ecartees:
             detail = " ; ".join(
-                f"**{runs[label].approche}** en écarte "
+                f"**{runs[label].serie}** en écarte "
                 f"{A.milliers(COUVERTURE.loc[label, 'n_ecartees'])}"
                 for label in ecartees
             )
@@ -333,8 +379,9 @@ observation par copie, chacune venant d'un élève différent — voir
 # intercaler dans le `div` de chaque modèle. Elles sont donc écrites dans
 # `figures/` et insérées en Markdown (cf. `A.enregistrer_figure`).
 PREVALENCES: dict[str, dict[str, pd.DataFrame]] = {}
-for modele, runs in VUES.items():
-    with A.vue_modele(modele, MODELE_ACTIF):
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
         fig, axes = A.grille_axes(len(runs), largeur=7.5, hauteur=7.0)
         PREVALENCES[modele] = {}
         for ax, r in zip(axes, runs.values()):
@@ -381,7 +428,7 @@ for modele, runs in VUES.items():
                 )
             ax.set_xlabel("Prévalence d'erreur selon l'expert (%)")
             ax.set_ylabel("Prévalence d'erreur selon le modèle (%)")
-            ax.set_title(r.approche, fontweight="bold")
+            ax.set_title(r.serie, fontweight="bold")
             ax.legend(loc="lower right", fontsize=8)
         fig.tight_layout()
         print(
@@ -400,7 +447,7 @@ for modele, runs in VUES.items():
             pente, _, r_pearson, *_ = scistats.linregress(x, y)
             lignes.append(
                 [
-                    r.approche,
+                    r.serie,
                     f"{np.corrcoef(x, y)[0, 1]:+.3f}",
                     f"{scistats.spearmanr(x, y).correlation:+.3f}",
                     f"{pente:.3f}",
@@ -426,7 +473,7 @@ for modele, runs in VUES.items():
         print("::: {.panel-tabset}")
         for r in runs.values():
             prev = PREVALENCES[modele][r.label]
-            print(f"\n### {r.approche}\n")
+            print(f"\n### {r.serie}\n")
             pires = prev.reindex(prev["ecart"].abs().sort_values(ascending=False).index).head(15)
             lignes = [
                 [
@@ -464,8 +511,9 @@ COLONNES = [
     ("n_fautes_expert", "n_fautes_modele", "Fautes d'orthographe (code 9)"),
     ("n_manquants_expert", "n_manquants_modele", "Mots absents (code 0)"),
 ]
-for modele, runs in VUES.items():
-    with A.vue_modele(modele, MODELE_ACTIF):
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
         fig, axes = plt.subplots(
             len(runs), 3, figsize=(16, 4.3 * len(runs)), squeeze=False, sharey="row"
         )
@@ -491,7 +539,7 @@ for modele, runs in VUES.items():
                 )
                 ax.set_xlabel("Nombre par copie")
                 ax.set_ylabel("Nombre de copies")
-                ax.set_title(f"{titre}\n{r.approche}", fontsize=9, fontweight="bold")
+                ax.set_title(f"{titre}\n{r.serie}", fontsize=9, fontweight="bold")
                 ax.legend(fontsize=7.5)
         fig.tight_layout()
         print(
@@ -513,11 +561,11 @@ for modele, runs in VUES.items():
         premier = next(iter(runs.values()))
         lignes = [["**Expert**", *_stats(premier.copies["n_erreurs_expert"])]]
         for r in runs.values():
-            lignes.append([f"Modèle — {r.approche}", *_stats(r.copies["n_erreurs_modele"])])
+            lignes.append([f"Modèle — {r.serie}", *_stats(r.copies["n_erreurs_modele"])])
             ks = scistats.ks_2samp(r.copies["n_erreurs_expert"], r.copies["n_erreurs_modele"])
             lignes.append(
                 [
-                    f"<small>↳ test de Kolmogorov–Smirnov ({r.approche})</small>",
+                    f"<small>↳ test de Kolmogorov–Smirnov ({r.serie})</small>",
                     f"<small>D = {ks.statistic:.3f}</small>",
                     f"<small>p = {ks.pvalue:.2g}</small>",
                     "", "", "", "",
@@ -551,7 +599,7 @@ for modele, runs in VUES.items():
         ax.plot(seuils, survie_exp, color=A.C_EXPERT, lw=2.8, label="Expert (référence)")
         for r in runs.values():
             survie_mod = [(r.copies["n_erreurs_modele"] > s).mean() * 100 for s in seuils]
-            ax.plot(seuils, survie_mod, color=r.couleur, lw=2, ls="--", label=f"Modèle — {r.approche}")
+            ax.plot(seuils, survie_mod, color=r.couleur, lw=2, ls="--", label=f"Modèle — {r.serie}")
             ax.fill_between(seuils, survie_exp, survie_mod, alpha=0.08, color=r.couleur)
         for seuil in (5, 10, 20, 40):
             if seuil > max_err:
@@ -591,8 +639,9 @@ le niveau absolu est biaisé.
 #| echo: false
 #| warning: false
 #| output: asis
-for modele, runs in VUES.items():
-    with A.vue_modele(modele, MODELE_ACTIF):
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
         fig, axes = A.grille_axes(len(runs), largeur=6.8, hauteur=6.6)
         correlations = {}
         for ax, r in zip(axes, runs.values()):
@@ -607,7 +656,7 @@ for modele, runs in VUES.items():
                 xs, ordonnee + pente * xs, color=A.C_EXPERT, lw=1.7,
                 label=f"y = {pente:.2f}x {ordonnee:+.2f}\nr = {r_pearson:.3f}, R² = {r_pearson**2:.3f}",
             )
-            correlations[r.approche] = {
+            correlations[r.serie] = {
                 "pearson": float(np.corrcoef(x, y)[0, 1]),
                 "spearman": float(scistats.spearmanr(x, y).correlation),
                 "kendall": float(scistats.kendalltau(x, y).correlation),
@@ -616,7 +665,7 @@ for modele, runs in VUES.items():
             }
             ax.set_xlabel("Nombre d'erreurs selon l'expert (proxy du niveau de l'élève)")
             ax.set_ylabel("Nombre d'erreurs selon le modèle")
-            ax.set_title(r.approche, fontweight="bold")
+            ax.set_title(r.serie, fontweight="bold")
             ax.legend(loc="upper left", fontsize=8)
         fig.tight_layout()
         print(
@@ -667,8 +716,9 @@ METRIQUES = [
     ("rappel", "Rappel (sensibilité)", "rappel_bas", "rappel_haut"),
     ("precision", "Précision sur les erreurs", None, None),
 ]
-for modele, runs in VUES.items():
-    with A.vue_modele(modele, MODELE_ACTIF):
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
         for col_tri, titre_source in SOURCES:
             courbes = {
                 label: A.metriques_par_difficulte(r.df, r.copies, col_tri)
@@ -680,7 +730,7 @@ for modele, runs in VUES.items():
                     courbe = courbes[label]
                     ax.plot(
                         courbe["x"], courbe[col], color=r.couleur, lw=2,
-                        marker="o", ms=4.5, label=r.approche,
+                        marker="o", ms=4.5, label=r.serie,
                     )
                     if col_bas:
                         ax.fill_between(
@@ -716,8 +766,9 @@ transition `code expert → code modèle`, soit la
 ```{python}
 #| echo: false
 #| output: asis
-for modele, runs in VUES.items():
-    with A.vue_modele(modele, MODELE_ACTIF):
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
         decompositions = {
             label: A.disagreement_decomposition(r.df).set_index("transition")
             for label, r in runs.items()
@@ -739,7 +790,7 @@ for modele, runs in VUES.items():
             lignes.append([f"`{transition}`", *cellules])
         print(
             A.table_markdown(
-                ["Transition expert → modèle", *(r.approche for r in runs.values())],
+                ["Transition expert → modèle", *(r.serie for r in runs.values())],
                 lignes,
                 f"Décomposition des désaccords de `{modele}` : effectif et part "
                 "parmi les désaccords",
@@ -758,44 +809,422 @@ les plus problématiques.
 #| echo: false
 #| warning: false
 #| output: asis
-for modele, runs in VUES.items():
-    with A.vue_modele(modele, MODELE_ACTIF):
-        reference = next(
-            (r for r in runs.values() if r.approche == A.APPROCHE_REFERENCE),
-            next(iter(runs.values())),
-        )
-        ordre = reference.items.sort_values("accord").index.tolist()
-        fig, ax = plt.subplots(figsize=(9.5, 0.28 * len(ordre) + 1.5))
-        y = np.arange(len(ordre))
-        decalages = np.linspace(-0.2, 0.2, len(runs)) if len(runs) > 1 else [0]
-        for decalage, r in zip(decalages, runs.values()):
-            items = r.items.reindex(ordre)
-            valeurs = items["accord"] * 100
-            err = [
-                (items["accord"] - items["accord_lo"]) * 100,
-                (items["accord_hi"] - items["accord"]) * 100,
-            ]
-            ax.errorbar(
-                valeurs, y + decalage, xerr=err, fmt="o", ms=4, lw=0,
-                elinewidth=0.9, capsize=1.8, color=r.couleur, alpha=0.9, label=r.approche,
+def ordre_items(runs, colonne, croissant=True):
+    """Série de référence de la vue et items triés selon sa `colonne` (NaN en bas)."""
+    reference = next(
+        (r for r in runs.values() if r.approche == A.APPROCHE_REFERENCE),
+        next(iter(runs.values())),
+    )
+    ordre = reference.items.sort_values(
+        colonne, ascending=croissant, na_position="last"
+    ).index.tolist()
+    return reference, ordre
+
+
+def tableau_par_item(runs, ordre, colonne, formateur, legende):
+    """Tableau d'une métrique par item, une colonne par série, dans l'ordre du graphique."""
+    lignes = []
+    for item in ordre:
+        ligne = [A.libelle_item(item, MOTS, RANGS).replace("|", "\\|")]
+        for r in runs.values():
+            it = r.items
+            ligne.append(
+                A.ic(it.at[item, colonne], it.at[item, f"{colonne}_lo"],
+                     it.at[item, f"{colonne}_hi"], formateur)
+                if item in it.index else "—"
             )
-        ax.set_yticks(y)
-        ax.set_yticklabels([A.libelle_item(i, MOTS, RANGS) for i in ordre], fontsize=7)
-        ax.invert_yaxis()
-        ax.axvline(85, color=A.C_PB, ls=":", lw=1)
-        ax.axvline(95, color=A.C_MOYEN, ls=":", lw=1)
-        ax.set_xlabel("Accord avec l'expert (%)")
-        ax.set_title(f"Accord par item — {modele}, items triés selon {reference.approche}",
-                     fontweight="bold")
-        ax.legend(loc="lower right", fontsize=8.5)
+        lignes.append(ligne)
+    return A.table_markdown(["Item"] + [r.serie for r in runs.values()], lignes, legende)
+
+
+def onglets_graphique_tableau(figure, tableau):
+    """Graphique et tableau de la même métrique, en deux onglets."""
+    return (
+        "\n::: {.panel-tabset}\n\n### Graphique\n\n" + figure
+        + "\n\n### Tableau\n\n" + tableau + "\n\n:::\n"
+    )
+
+
+def kappa_fmt(x):
+    return A.num(x, 2)
+
+
+def points_signes(x):
+    return "—" if pd.isna(x) else f"{float(x) * 100:+.1f} pts"
+
+
+def figure_par_item(runs, modele, colonne, echelle, seuils, xlabel, nom, legende):
+    """Une métrique par item et son IC, une série par run, items triés par la référence.
+
+    Args:
+        runs: runs de la vue.
+        modele: titre de la vue (légendes, nom de fichier).
+        colonne: colonne de `Run.items` (`accord` ou `kappa`), avec `_lo` / `_hi`.
+        echelle: facteur d'affichage (100 pour un pourcentage).
+        seuils: lignes de repère verticales, de la plus exigeante à la moins.
+        xlabel: libellé de l'axe horizontal.
+        nom: préfixe du fichier de la figure.
+        legende: légende affichée sous la figure.
+
+    Returns:
+        Le Markdown de la figure. Les items où la métrique n'est pas définie (kappa
+        d'un item sans aucune erreur, ni de l'expert ni du modèle) sont rangés en
+        bas, sans point.
+    """
+    reference, ordre = ordre_items(runs, colonne)
+    fig, ax = plt.subplots(figsize=(9.5, 0.28 * len(ordre) + 1.5))
+    y = np.arange(len(ordre))
+    decalages = np.linspace(-0.2, 0.2, len(runs)) if len(runs) > 1 else [0]
+    for decalage, r in zip(decalages, runs.values()):
+        items = r.items.reindex(ordre)
+        valeurs = items[colonne] * echelle
+        err = [
+            ((items[colonne] - items[f"{colonne}_lo"]) * echelle).clip(lower=0),
+            ((items[f"{colonne}_hi"] - items[colonne]) * echelle).clip(lower=0),
+        ]
+        ax.errorbar(
+            valeurs, y + decalage, xerr=err, fmt="o", ms=4, lw=0,
+            elinewidth=0.9, capsize=1.8, color=r.couleur, alpha=0.9, label=r.serie,
+        )
+    ax.set_yticks(y)
+    ax.set_yticklabels([A.libelle_item(i, MOTS, RANGS) for i in ordre], fontsize=7)
+    ax.invert_yaxis()
+    for seuil, couleur in zip(seuils, (A.C_PB, A.C_MOYEN)):
+        ax.axvline(seuil, color=couleur, ls=":", lw=1)
+    ax.set_xlabel(xlabel)
+    ax.set_title(f"{xlabel.split(' (')[0]} par item — {modele}, items triés selon "
+                 f"{reference.serie}", fontweight="bold")
+    ax.legend(loc="lower right", fontsize=8.5)
+    return A.enregistrer_figure(fig, f"{nom}-{modele}", legende)
+
+
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
+        figure = figure_par_item(
+            runs, modele, "accord", 100, (85, 95), "Accord avec l'expert (%)",
+            "accord-item",
+            f"Accord modèle-expert par item — {modele}, trié par accord croissant. "
+            "Barres = IC Wilson 95 %.",
+        )
+        tableau = tableau_par_item(
+            runs, ordre_items(runs, "accord")[1], "accord", A.pct,
+            f"Accord modèle-expert par item [IC Wilson 95 %] — `{modele}`",
+        )
+        print(onglets_graphique_tableau(figure, tableau))
+```
+
+## Kappa par item {#kappa-par-item}
+
+Même lecture que ci-dessus, avec le [kappa de Cohen](evaluation.qmd#kappa) au lieu
+de l'accord brut. Le kappa retire l'accord qu'on obtiendrait **par hasard**, et ce
+hasard dépend de la part d'élèves qui se trompent sur l'item. Il corrige donc ce qui
+gonfle l'accord brut sur les items faciles : un modèle qui valide tout obtient un
+accord élevé sur un mot que presque tous les élèves réussissent, mais un kappa nul.
+C'est aussi ce qui rend la comparaison 2015 / 2021 plus juste qu'avec l'accord
+brut, les élèves de 2021 faisant davantage de fautes.
+
+Les intervalles à 95 % sont asymptotiques (méthode delta de Fleiss), **sans
+correction de grappes** : pour un item donné, chaque copie ne compte qu'une fois
+— voir [où la correction ne s'applique pas](evaluation.qmd#sans-correction). Ils
+s'élargissent sur les items où les erreurs sont rares : le kappa y repose sur
+peu de cas. Repères : 0,6 (accord « substantiel ») et 0,8 (« presque parfait »),
+selon l'échelle usuelle de Landis et Koch.
+
+```{python}
+#| echo: false
+#| warning: false
+#| output: asis
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
+        figure = figure_par_item(
+            runs, modele, "kappa", 1, (0.6, 0.8), "Kappa de Cohen avec l'expert",
+            "kappa-item",
+            f"Kappa de Cohen modèle-expert par item — {modele}, trié par kappa "
+            "croissant. Barres = IC asymptotique 95 % (Fleiss).",
+        )
+        tableau = tableau_par_item(
+            runs, ordre_items(runs, "kappa")[1], "kappa", kappa_fmt,
+            f"Kappa de Cohen modèle-expert par item [IC 95 %] — `{modele}`",
+        )
+        print(onglets_graphique_tableau(figure, tableau))
+        non_definis = sorted(
+            {i for r in runs.values() for i in r.items.index[r.items["kappa"].isna()]}
+        )
+        if non_definis:
+            print(
+                "\n<small>Kappa non défini (une seule catégorie observée : aucun "
+                "élève ne se trompe et le modèle valide partout) pour : "
+                + ", ".join(f"`{A.libelle_item(i, MOTS, RANGS)}`" for i in non_definis)
+                + ". Ces items sont en bas du graphique, sans point.</small>"
+            )
+```
+
+## Sur-correction et sur-détection par item {#erreurs-par-item}
+
+Les deux façons de se tromper, item par item (définitions sur la page
+[Évaluation & métriques](evaluation.qmd)) :
+
+- **[sur-correction](evaluation.qmd#sur-correction)** (premier graphique) : part des
+  fautes de l'élève que le modèle valide à tort. La faute passe inaperçue et le
+  niveau de l'élève est surestimé.
+- **[sur-détection](evaluation.qmd#sur-detection)** (second graphique) : part des
+  mots écrits correctement que le modèle sanctionne. L'élève est pénalisé à tort.
+
+Plus bas = mieux, sur les deux graphiques. Chacun trie les items par taux
+décroissant de la série de référence : les items du haut sont ceux où le modèle se
+trompe le plus. Les intervalles sont ceux de Wilson à 95 %, sans
+correction de grappes (une observation par copie et par item). Ils sont larges sur
+le premier graphique quand l'item compte peu de fautes : le taux y repose sur peu
+de cas.
+
+```{python}
+#| echo: false
+#| warning: false
+#| output: asis
+PANNEAUX_ERREURS = [
+    (
+        "taux_sur_correction", "sur-correction",
+        "Sur-correction (% des fautes de l'élève validées)",
+    ),
+    (
+        "taux_sur_detection", "sur-detection",
+        "Sur-détection (% des mots corrects sanctionnés)",
+    ),
+]
+
+
+def figure_points_par_item(runs, modele, colonne, nom, titre, croissant=False, zero=False):
+    """Une métrique par item (en %), avec IC, items triés selon la série de référence.
+
+    `zero` centre la lecture sur 0 (biais signé) ; sinon l'axe part de 0 (taux).
+    """
+    reference, ordre = ordre_items(runs, colonne, croissant)
+    fig, ax = plt.subplots(figsize=(13, 0.28 * len(ordre) + 1.5))
+    y = np.arange(len(ordre))
+    decalages = np.linspace(-0.2, 0.2, len(runs)) if len(runs) > 1 else [0]
+    for decalage, r in zip(decalages, runs.values()):
+        items = r.items.reindex(ordre)
+        err = [
+            ((items[colonne] - items[f"{colonne}_lo"]) * 100).clip(lower=0),
+            ((items[f"{colonne}_hi"] - items[colonne]) * 100).clip(lower=0),
+        ]
+        ax.errorbar(
+            items[colonne] * 100, y + decalage, xerr=err, fmt="o", ms=4, lw=0,
+            elinewidth=0.9, capsize=1.8, color=r.couleur, alpha=0.9, label=r.serie,
+        )
+    if zero:
+        ax.axvline(0, color="grey", lw=1)
+    else:
+        ax.set_xlim(left=0)
+    ax.set_xlabel(titre)
+    ax.grid(axis="x", alpha=0.3)
+    ax.set_yticks(y)
+    ax.set_yticklabels([A.libelle_item(i, MOTS, RANGS) for i in ordre], fontsize=7)
+    ax.set_ylim(len(ordre) - 0.5, -0.5)
+    ax.legend(loc="upper right" if zero else "lower right", fontsize=8.5)
+    court = titre.split(" (")[0]
+    ax.set_title(
+        f"{court} par item — {modele}, items triés selon {reference.serie}",
+        fontweight="bold",
+    )
+    fig.tight_layout()
+    return A.enregistrer_figure(
+        fig, f"{nom}-item-{modele}", f"{court} par item — {modele}. Barres = IC à 95 %."
+    )
+
+
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
+        for colonne, suffixe, titre in PANNEAUX_ERREURS:
+            tableau = tableau_par_item(
+                runs, ordre_items(runs, colonne, croissant=False)[1], colonne, A.pct,
+                f"{titre.split(' (')[0]} par item [IC Wilson 95 %] — `{modele}`",
+            )
+            print(onglets_graphique_tableau(
+                figure_points_par_item(runs, modele, colonne, suffixe, titre), tableau
+            ))
+```
+
+## Biais net par item {#biais-net-par-item}
+
+Pour un **indicateur publié** (taux de réussite d'un item), sur-correction et
+sur-détection se compensent. Ce qui compte est leur **solde** : le biais net est
+la prévalence d'erreur selon le modèle moins celle de l'expert, soit
+(sur-détections − sur-corrections) / copies, en points de pourcentage.
+
+- **Négatif** : le modèle trouve moins de fautes que l'expert. Le taux de réussite
+  publié de l'item serait **surestimé**.
+- **Positif** : le modèle trouve trop de fautes. Le taux de réussite serait
+  **sous-estimé**.
+- **Proche de 0** : l'indicateur est juste, même si le modèle se trompe sur des
+  copies individuelles. Il faut alors l'absence de biais, pas l'accord parfait.
+
+Les items sont triés du biais le plus négatif au plus positif pour la série de
+référence. L'intervalle est un IC normal à 95 % sur la différence **appariée**
+(le modèle et l'expert jugent les mêmes copies), sans correction de grappes : une
+observation par copie et par item.
+
+```{python}
+#| echo: false
+#| warning: false
+#| output: asis
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
+        figure = figure_points_par_item(
+            runs, modele, "biais_net", "biais-net",
+            "Biais net (prévalence modèle − expert, en points)", croissant=True, zero=True,
+        )
+        tableau = tableau_par_item(
+            runs, ordre_items(runs, "biais_net")[1], "biais_net", points_signes,
+            f"Biais net par item, prévalence modèle − expert [IC 95 %] — `{modele}`",
+        )
+        print(onglets_graphique_tableau(figure, tableau))
+        lignes = []
+        for r in runs.values():
+            it = r.items
+            sous = int((it["biais_net_hi"] < 0).sum())
+            sur = int((it["biais_net_lo"] > 0).sum())
+            lignes.append(
+                [
+                    r.serie,
+                    f"{it['biais_net'].mean() * 100:+.1f} pts",
+                    f"{it['biais_net'].abs().mean() * 100:.1f} pts",
+                    f"{it['biais_net'].abs().max() * 100:.1f} pts",
+                    f"{sous} / {len(it)}",
+                    f"{sur} / {len(it)}",
+                ]
+            )
         print(
-            A.enregistrer_figure(
-                fig,
-                f"accord-item-{modele}",
-                f"Accord modèle-expert par item pour `{modele}`, trié par accord "
-                "croissant. Barres = IC Wilson 95 %.",
+            "\n"
+            + A.table_markdown(
+                [
+                    "Série", "Biais moyen", "Biais absolu moyen", "Biais absolu max",
+                    "Items sous-estimés*", "Items surestimés*",
+                ],
+                lignes,
+                f"Biais net des prévalences par item — `{modele}`",
             )
         )
+        print(
+            "\n<small>* Erreurs sous-estimées (resp. surestimées) : items dont l'IC à "
+            "95 % du biais net est entièrement sous (resp. au-dessus de) 0. Le **biais "
+            "absolu moyen** est l'erreur typique sur le taux de réussite publié d'un "
+            "item ; le biais moyen, lui, laisse les items se compenser entre eux.</small>"
+        )
+```
+
+## Accord entre les séries d'une même année {#accord-inter-series}
+
+Les séries de la vue qui portent sur la **même année** codent les mêmes copies :
+on peut mesurer leur accord **entre elles**, sans l'expert. En mode « deux prompts »,
+ce sont les 4 séries (2 prompts × 2 approches). En mode « deux années », ce sont
+les 2 approches de chaque année.
+
+- **Accord inter-séries** : part des items où deux séries rendent le même code,
+  et kappa de Cohen correspondant. Le **kappa de Fleiss** généralise ce kappa à
+  toutes les séries à la fois.
+- **Accord avec l'expert selon le consensus** : les items sont regroupés selon le
+  nombre de séries qui rendent le code majoritaire (4 sur 4, 3 sur 4, 2 sur 4…).
+  Pour chaque groupe, on donne l'accord brut avec l'expert du code majoritaire et
+  de chaque série. En cas d'**égalité** (2 contre 2), il n'y a pas de code
+  majoritaire : seul l'accord de chaque série est donné.
+
+Si l'accord avec l'expert chute quand le consensus baisse, le désaccord entre
+séries est un **signal de confiance** : on peut renvoyer à un humain les seuls
+items où les séries divergent.
+
+```{python}
+#| echo: false
+#| warning: false
+#| output: asis
+def libelle_niveau(ligne, n_series):
+    """Niveau de consensus lisible : « 3 sur 4 », ou l'égalité de voix."""
+    n = int(ligne["n_accord_modeles"])
+    if ligne["egalite"]:
+        return f"égalité ({n} contre {n})" if 2 * n == n_series else f"égalité ({n} voix)"
+    return f"{n} sur {n_series}"
+
+
+def accord_inter_series(runs_annee, titre):
+    """Tables d'accord inter-séries et de consensus pour les séries d'une année."""
+    par_serie = {r.serie: r for r in runs_annee}
+    joint = A.joindre_runs(par_serie)
+    if joint is None:
+        print("*Aucun item commun à ces séries.*\n")
+        return
+    accord = A.agreement_per_item(joint)
+    matrice_accord, matrice_kappa = A.pairwise_agreement(joint)
+    series = list(par_serie)
+    n_series = len(series)
+    print(
+        f"Sur les {A.milliers(len(joint))} items communs "
+        f"({A.milliers(joint['copy_id'].nunique())} copies), les {n_series} séries "
+        f"rendent toutes le même code sur **{A.pct(accord['unanimite'].mean())}** "
+        f"des items. Kappa de Fleiss : **{A.num(A.fleiss_kappa(joint))}**.\n"
+    )
+    lignes = [
+        [f"**{a}**"]
+        + [
+            "—" if a == b
+            else f"{A.pct(matrice_accord.loc[a, b])} · κ {A.num(matrice_kappa.loc[a, b])}"
+            for b in series
+        ]
+        for a in series
+    ]
+    print(
+        A.table_markdown(
+            ["Série", *series], lignes, f"Accord brut et kappa entre séries — {titre}"
+        )
+    )
+    niveaux = A.consensus_levels(accord)
+    lignes = [
+        [
+            libelle_niveau(ligne, n_series),
+            A.milliers(ligne["n_items"]),
+            A.pts(ligne["pct_items"]),
+            "—" if pd.isna(ligne["accord_majoritaire"]) else A.pct(ligne["accord_majoritaire"]),
+            *[A.pct(ligne[f"accord__{s}"]) for s in series],
+        ]
+        for _, ligne in niveaux.iterrows()
+    ]
+    print(
+        "\n"
+        + A.table_markdown(
+            ["Séries d'accord", "Items", "Part", "Code majoritaire", *series],
+            lignes,
+            f"Accord brut avec l'expert selon le consensus — {titre}",
+        )
+    )
+    print(
+        "\n<small>Lecture : chaque ligne regroupe les items selon le nombre de séries "
+        "qui rendent le code majoritaire. Les colonnes de droite donnent l'accord avec "
+        "l'expert de chaque série sur ces items : sur les lignes basses, elles disent "
+        "quelle série a raison quand les séries divergent.</small>\n"
+    )
+
+
+for cle, runs in VUES.items():
+    vue = VUES_DEF[cle]
+    with A.vue_modele(cle, CLE_ACTIVE):
+        annees = sorted({r.annee for r in runs.values()})
+        affiche = False
+        for annee in annees:
+            runs_annee = [r for r in runs.values() if r.annee == annee]
+            if len(runs_annee) < 2:
+                continue
+            affiche = True
+            if len(annees) > 1:
+                print(f"\n**Dictée {annee}**\n")
+            accord_inter_series(runs_annee, f"{vue.modele}, dictée {annee}")
+        if not affiche:
+            print('::: {.callout-note appearance="simple"}')
+            print("Il faut **au moins deux séries** sur une même année pour mesurer")
+            print("leur accord.")
+            print(":::")
 ```
 
 ## Accord par copie
@@ -804,14 +1233,15 @@ for modele, runs in VUES.items():
 #| echo: false
 #| warning: false
 #| output: asis
-for modele, runs in VUES.items():
-    with A.vue_modele(modele, MODELE_ACTIF):
+for cle, runs in VUES.items():
+    modele = VUES_DEF[cle].titre
+    with A.vue_modele(cle, CLE_ACTIVE):
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13.5, 4.8))
         for r in runs.values():
             ax1.hist(
                 r.copies["accord"] * 100, bins=30, color=r.couleur, alpha=0.55,
                 edgecolor="white", linewidth=0.3,
-                label=f"{r.approche} (moy. {r.copies['accord'].mean():.1%})",
+                label=f"{r.serie} (moy. {r.copies['accord'].mean():.1%})",
             )
             ax1.axvline(r.copies["accord"].mean() * 100, color=r.couleur, ls="--", lw=1.5)
         ax1.set_xlabel("Accord sur la copie (%)")
@@ -831,7 +1261,7 @@ for modele, runs in VUES.items():
             )
             ax2.plot(
                 tendance["x"], tendance["y"] * 100, color=r.couleur, lw=2.2,
-                marker="o", ms=5, label=r.approche,
+                marker="o", ms=5, label=r.serie,
             )
         ax2.set_xlabel("% d'items en erreur sur la copie, selon l'expert")
         ax2.set_ylabel("Accord modèle-expert (%)")
@@ -863,19 +1293,23 @@ et cette composition n'est pas neutre, puisque les copies manquantes sont en
 général les plus difficiles (échec de transcription) ou simplement les dernières
 de la file (run inachevé).
 
-Les deux menus ci-dessous choisissent les **deux modèles confrontés**. Toute cette
-partie porte sur eux, chacun avec ses deux approches : les métriques sont
-recalculées sur l'**intersection** des copies traitées par les runs comparés.
+Les menus ci-dessous choisissent l'**année et le prompt**, puis les **deux modèles
+confrontés**. Toute cette partie porte sur eux, chacun avec ses deux approches :
+les métriques sont recalculées sur l'**intersection** des copies traitées par les
+runs comparés. Seules les combinaisons année · prompt où au moins deux modèles
+sont exportés sont proposées.
 
 ```{python}
 #| echo: false
 #| output: asis
 if PAIRES:
-    print(A.selecteur_paire(MODELES, PAIRE_ACTIVE))
+    MODELES_PAIRES = [m for m in A.MODELES if any(m in paire for _, paire in PAIRES)]
+    print(A.selecteur_paire(CONFIGS_PAIRES, MODELES_PAIRES, *_PAIRE_INITIALE))
 else:
     print('::: {.callout-note appearance="simple"}')
-    print("Cette partie demande **au moins deux modèles exportés**. Un seul est")
-    print("disponible : lancer puis exporter un second modèle pour l'activer.")
+    print("Cette partie demande **au moins deux modèles exportés** sur une même")
+    print("année et un même prompt : lancer puis exporter un second modèle pour")
+    print("l'activer.")
     print(":::")
 ```
 
@@ -885,13 +1319,15 @@ else:
 # Calculs de chaque paire, faits une fois : les sections suivantes s'y réfèrent.
 # Le corpus commun, le consensus et la courbe de renvoi dépendent tous des DEUX
 # modèles confrontés, donc de la paire — ils ne peuvent pas être mutualisés.
-DONNEES_PAIRES: dict[tuple[str, str], dict] = {}
-for paire in PAIRES:
-    runs = runs_paire(paire)
+DONNEES_PAIRES: dict[str, dict] = {}
+for config, paire in PAIRES:
+    runs = runs_paire(config, paire)
     communs, n_commun = A.restreindre_corpus_commun(runs) if len(runs) >= 2 else ({}, 0)
     joint = A.joindre_runs(runs) if len(runs) >= 2 else None
     accord = A.agreement_per_item(joint) if joint is not None else None
-    DONNEES_PAIRES[paire] = {
+    DONNEES_PAIRES[A.cle_paire(config, paire)] = {
+        "config": config,
+        "paire": paire,
         "runs": runs,
         "communs": communs,
         "n_commun": n_commun,
@@ -915,6 +1351,12 @@ if PAIRES:
     print("[Un modèle à la fois](#un-modele-a-la-fois).")
     print(":::")
     print(A.FENCE_VUE)
+    print(f"\n{A.FENCE_VUE} {{.vue-paire-absente}}")
+    print('::: {.callout-note appearance="simple"}')
+    print("L'un des deux modèles n'est **pas exporté** pour cette année et ce prompt :")
+    print("choisir une autre année · prompt, ou un autre modèle.")
+    print(":::")
+    print(A.FENCE_VUE)
 ```
 
 ## Métriques à corpus commun
@@ -927,8 +1369,9 @@ telle quelle et n'est pas répétée ici.
 ```{python}
 #| echo: false
 #| output: asis
-for paire, d in DONNEES_PAIRES.items():
-    with A.vue_paire(paire, PAIRE_ACTIVE):
+for cle, d in DONNEES_PAIRES.items():
+    paire = d["paire"]
+    with A.vue_paire(cle, PAIRE_ACTIVE):
         communs = d["communs"]
         if not communs:
             print('::: {.callout-note appearance="simple"}')
@@ -989,8 +1432,9 @@ contrairement à l'accord brut que la prévalence gonfle.
 ```{python}
 #| echo: false
 #| output: asis
-for paire, d in DONNEES_PAIRES.items():
-    with A.vue_paire(paire, PAIRE_ACTIVE):
+for cle, d in DONNEES_PAIRES.items():
+    paire = d["paire"]
+    with A.vue_paire(cle, PAIRE_ACTIVE):
         communs = d["communs"]
         lignes = []
         for approche in A.APPROCHES:
@@ -1050,8 +1494,9 @@ moins souvent *de la même façon*.
 #| echo: false
 #| warning: false
 #| output: asis
-for paire, d in DONNEES_PAIRES.items():
-    with A.vue_paire(paire, PAIRE_ACTIVE):
+for cle, d in DONNEES_PAIRES.items():
+    paire = d["paire"]
+    with A.vue_paire(cle, PAIRE_ACTIVE):
         accord, confiance = d["accord"], d["confiance"]
         if accord is None:
             print('::: {.callout-note appearance="simple"}')
@@ -1091,7 +1536,7 @@ for paire, d in DONNEES_PAIRES.items():
             print(
                 A.enregistrer_figure(
                     fig,
-                    f"consensus-{paire[0]}-{paire[1]}",
+                    f"consensus-{cle}",
                     f"Le consensus entre `{paire[0]}` et `{paire[1]}` prédit l'accord "
                     "avec l'expert.",
                 )
@@ -1133,8 +1578,9 @@ construction de la courbe est détaillée dans
 #| echo: false
 #| warning: false
 #| output: asis
-for paire, d in DONNEES_PAIRES.items():
-    with A.vue_paire(paire, PAIRE_ACTIVE):
+for cle, d in DONNEES_PAIRES.items():
+    paire = d["paire"]
+    with A.vue_paire(cle, PAIRE_ACTIVE):
         accord, confiance = d["accord"], d["confiance"]
         if accord is None:
             print('::: {.callout-note appearance="simple"}')
@@ -1173,7 +1619,7 @@ for paire, d in DONNEES_PAIRES.items():
             print(
                 A.enregistrer_figure(
                     fig,
-                    f"renvoi-{paire[0]}-{paire[1]}",
+                    f"renvoi-{cle}",
                     "Arbitrage charge humaine / qualité automatisée, pour les runs de "
                     f"`{paire[0]}` et `{paire[1]}`.",
                 )
@@ -1292,15 +1738,14 @@ print(A.bloc_notes())
 exportation que la présente page relit (aucun pipeline n'est réexécuté au rendu) :
 
 ```bash
-# Codage de la dictée, une commande par approche et par modèle
+# Codage de la dictée, une commande par année, approche, prompt et modèle.
+# Le prompt est OBLIGATOIRE à l'export et doit figurer dans le `name` du YAML
+# (dictee<année>_<approche>_<prompt>) ; destination : le dossier lu par le site.
 uv run scripts/run_benchmark.py      --config configs/scoring/dictee_end2end.yaml \
                                      --model-name <modèle>
 uv run scripts/export_predictions.py --config configs/scoring/dictee_end2end.yaml \
-                                     --model-name <modèle>
-uv run scripts/run_benchmark.py      --config configs/scoring/dictee_two_stage.yaml \
-                                     --model-name <modèle>
-uv run scripts/export_predictions.py --config configs/scoring/dictee_two_stage.yaml \
-                                     --model-name <modèle>
+                                     --model-name <modèle> --prompt base \
+                                     --dest-prefix s3://projet-production-ecrits-depp/prediction_depp
 
 # Transcription seule (CER/WER) sur Scoledit
 uv run scripts/run_htr_benchmark.py --config configs/htr/htr_REFERENCE.yaml
@@ -1316,16 +1761,20 @@ uv sync --extra website
 uv run quarto render website        # ou : uv run quarto preview website
 ```
 
-## Ajouter un modèle au menu déroulant
+## Ajouter un modèle, une année ou un prompt aux menus {#ajouter-un-modele}
 
-**Rien à coder** : le nom du modèle fait partie du nom de fichier exporté
-(`<run>_<modèle>_predictions.jsonl`). La page **liste les runs présents** sous
-`S3_PREDICTIONS_PREFIX` et en déduit les modèles à proposer. Exporter un nouveau
-modèle, réexécuter le rendu, il apparaît dans les deux menus.
+**Rien à coder** : tout est lu dans le nom du fichier exporté,
+`dictee<année>_<approche>_<prompt>_<modèle>_predictions.jsonl` (convention de
+`src/evaluation_dictee/run_names.py`, décision D12). La page **liste les runs
+présents** sous `S3_PREDICTIONS_PREFIX` et en déduit modèles, années et prompts.
+Pour un nouveau prompt : copier une config, changer son `name` (ex.
+`dictee2021_end2end_exemples` — le prompt s'écrit sans tiret bas), lancer le run
+sur le **corpus complet**, l'exporter avec `--prompt exemples`, réexécuter le
+rendu. Un nom qui ne suit pas la convention est ignoré, et signalé en fin de page.
 
-Un modèle exporté sur **une seule** approche est proposé quand même, signalé
-« (1 approche) » dans le menu : sa vue affiche l'approche disponible et dit
-laquelle manque. Il ne peut pas entrer dans le classement à approche fixée.
+Une série manquante (une approche non exportée pour une année ou un prompt) n'empêche
+pas la vue d'exister : elle affiche les séries disponibles et dit lesquelles
+manquent.
 
 Les variables d'environnement ne servent plus qu'à **forcer** un affichage :
 
@@ -1336,6 +1785,10 @@ export RESULTATS_MODELES="gemma4-26b-moe,qwen3-6-35b-moe"
 # (page Écarts) — par défaut le premier modèle évalué sur toutes les approches :
 export RESULTATS_MODELE_REFERENCE=gemma4-26b-moe
 export RESULTATS_APPROCHE_REFERENCE="end-to-end"   # approche de référence
+# Année et prompt des pages sans ces axes (Écarts, Évaluation) — par défaut la
+# dernière année complète, prompt `base` :
+export RESULTATS_ANNEE_REFERENCE=2015
+export RESULTATS_PROMPT_REFERENCE=base
 export RESULTATS_RUN_HTR_BASE=htr_gemma4_base
 export RESULTATS_RUN_HTR_FINETUNE=htr_gemma4_finetune
 # Rendu hors ligne, depuis un dossier local de prédictions :
@@ -1353,7 +1806,7 @@ que si son `.qmd` change. Après un **nouvel export** de prédictions, forcer le
 recalcul avec `rm -rf website/_freeze`, sinon le site réaffiche les chiffres du
 rendu précédent — et un modèle tout juste exporté n'apparaîtra pas dans les menus.
 
-Les figures des vues vivent dans `website/figures/` (une par modèle et par
+Les figures des vues vivent dans `website/figures/` (une par vue et par
 section), et le cache ne les régénère pas : supprimer ce dossier sans supprimer
 `website/_freeze/` laisserait des images cassées. Les deux se suppriment
 ensemble.

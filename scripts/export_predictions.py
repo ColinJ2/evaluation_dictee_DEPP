@@ -23,9 +23,14 @@ pourtant ainsi que tous les bras d'expérience de ce projet ont été lancés. A
 `--run-name` seul, aucun YAML n'existe pour retrouver `labels_path` : un choix
 explicite est alors obligatoire.
 
+Un run publié sur le site (corpus complet) doit déclarer son prompt avec `--prompt` :
+le nom du run doit suivre `dictee<AAAA>_<end2end|two_stage>_<prompt>_<modele>` et
+porter ce prompt, sinon l'export est refusé (voir `evaluation_dictee/run_names.py`).
+
 Usage :
     # scoring — end_to_end OU two_stage (même format, c'est le `name` qui distingue) :
-    uv run scripts/export_predictions.py --config configs/scoring/dictee_REFERENCE.yaml
+    uv run scripts/export_predictions.py --config configs/scoring/dictee_end2end.yaml \
+        --prompt base
 
     # un bras testé sur un échantillon (destination déduite automatiquement) :
     uv run scripts/export_predictions.py --config configs/scoring/dictee_end2end_cot.yaml \
@@ -47,6 +52,7 @@ from pathlib import Path
 from evaluation_dictee.config import Secrets, load_config, override_model_names, run_output_name
 from evaluation_dictee.data.loaders import load_labels
 from evaluation_dictee.evaluation.report import load_predictions
+from evaluation_dictee.run_names import verifier_prompt
 from evaluation_dictee.utils.logging import get_logger
 from evaluation_dictee.utils.s3_export import (
     SCORING_SUFFIX,
@@ -118,6 +124,15 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--prompt",
+        default=None,
+        help=(
+            "Nom du prompt du run (ex. `base`, `exemples`). OBLIGATOIRE pour un run "
+            "publié sur le site : il doit figurer dans le nom du run "
+            "(`dictee<AAAA>_<approche>_<prompt>_<modele>`), qui est vérifié."
+        ),
+    )
+    parser.add_argument(
         "--source-dir",
         default="data/processed",
         help="Dossier local des prédictions. [défaut : data/processed]",
@@ -157,6 +172,19 @@ def main() -> None:
         # HTR sans réglage explicite : pas d'ambiguïté à lever pour le site, qui ne
         # lit jamais les runs HTR ; on garde l'emplacement historique par défaut.
         experimentation = False
+
+    # Un run publié sur le site doit déclarer son prompt : le site classe les runs
+    # par année, approche et prompt, lus dans le nom (cf. `run_names.py`).
+    if not args.htr and not experimentation:
+        if not args.prompt:
+            parser.error(
+                "--prompt est obligatoire pour un run publié sur le site (corpus "
+                "complet) : nommer le prompt du run, ex. --prompt base."
+            )
+        try:
+            verifier_prompt(run_name, args.prompt)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     base_prefix = args.dest_prefix or Secrets().s3_predictions_prefix
     dest_prefix = resolve_dest_prefix(base_prefix, experimentation)

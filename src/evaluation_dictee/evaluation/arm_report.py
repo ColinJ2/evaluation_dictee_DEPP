@@ -28,6 +28,10 @@ from pathlib import Path
 from evaluation_dictee.data.grid import GridItem, load_grid
 from evaluation_dictee.evaluation.metrics import compute_scoring_metrics
 from evaluation_dictee.evaluation.report import filtrer_evaluables, load_predictions
+from evaluation_dictee.evaluation.statistics import wilson_interval
+from evaluation_dictee.utils.logging import get_logger
+
+logger = get_logger(__name__)
 
 #: Bras connus : libellé affiché -> préfixe du run (`<prefixe>_<modele>_predictions.jsonl`).
 #: La référence vient en premier, c'est elle qui sert d'étalon à tous les écarts.
@@ -91,7 +95,27 @@ class Rapport:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _localiser(dossier: Path, prefixe: str, modele: str) -> str | None:
+def _racines_distantes(prefixe_s3: str | None) -> list[str]:
+    """Racines distantes où chercher : `predictions/`, puis son sous-dossier d'expériences.
+
+    Args:
+        prefixe_s3: racine des prédictions exportées. None = `S3_PREDICTIONS_PREFIX`
+            (ou sa valeur par défaut) ; chaîne vide = aucune recherche distante.
+
+    Returns:
+        Les racines, sans barre finale. Liste vide si la recherche distante est coupée.
+    """
+    from evaluation_dictee.config import Secrets
+    from evaluation_dictee.utils.s3_export import EXPERIMENTATIONS_SUBDIR
+
+    base = Secrets().s3_predictions_prefix if prefixe_s3 is None else prefixe_s3
+    base = base.rstrip("/")
+    return [base, f"{base}/{EXPERIMENTATIONS_SUBDIR}"] if base else []
+
+
+def _localiser(
+    dossier: Path, prefixe: str, modele: str, prefixe_s3: str | None = None
+) -> str | None:
     """Chemin des prédictions d'un run : local, puis `predictions/`, puis son sous-dossier.
 
     Les runs de référence (corpus complet) vivent dans `predictions/` ; les bras
@@ -104,6 +128,7 @@ def _localiser(dossier: Path, prefixe: str, modele: str) -> str | None:
         dossier: dossier local des prédictions.
         prefixe: préfixe du run (champ `name` de la config).
         modele: nom du modèle.
+        prefixe_s3: racine distante, voir `_racines_distantes`.
 
     Returns:
         Le chemin local ou l'URI S3, ou None si le run est introuvable nulle part.
@@ -115,11 +140,8 @@ def _localiser(dossier: Path, prefixe: str, modele: str) -> str | None:
     try:
         import fsspec
 
-        from evaluation_dictee.config import Secrets
-        from evaluation_dictee.utils.s3_export import EXPERIMENTATIONS_SUBDIR
-
-        base = Secrets().s3_predictions_prefix.rstrip("/")
-        for uri in (f"{base}/{fichier}", f"{base}/{EXPERIMENTATIONS_SUBDIR}/{fichier}"):
+        for racine in _racines_distantes(prefixe_s3):
+            uri = f"{racine}/{fichier}"
             fs, chemin = fsspec.core.url_to_fs(uri)
             if fs.exists(chemin):
                 return uri
@@ -128,10 +150,84 @@ def _localiser(dossier: Path, prefixe: str, modele: str) -> str | None:
         return None
 
 
+def _prefixes_connus() -> list[str]:
+    """Noms de run déclarés par les configs de scoring (champ `name`), triés."""
+    import yaml
+
+    noms = set(BRAS_PAR_DEFAUT.values())
+    for chemin in Path("configs/scoring").glob("*.yaml"):
+        try:
+            nom = (yaml.safe_load(chemin.read_text(encoding="utf-8")) or {}).get("name")
+        except Exception:  # noqa: BLE001 — une config illisible ne bloque pas l'inventaire
+            continue
+        if isinstance(nom, str):
+            noms.add(nom)
+    return sorted(noms)
+
+
+def inventaire_runs(
+    bras: dict[str, str],
+    dossier: str | Path = "data/processed",
+    prefixe_s3: str | None = None,
+) -> dict[str, dict[str, str]]:
+    """Modèles disponibles pour chaque bras, avec l'emplacement retenu.
+
+    Un fichier est attribué au préfixe connu le PLUS LONG qu'il porte : sans cela,
+    `dictee_end2end_cot_<modele>` serait lu comme le modèle `cot_<modele>` du bras
+    `dictee_end2end` (le bug de la décision D9). Les préfixes connus sont ceux des
+    bras demandés et des configs de `configs/scoring/`.
+
+    Args:
+        bras: libellé de bras -> préfixe de run.
+        dossier: dossier local des prédictions.
+        prefixe_s3: racine distante, voir `_racines_distantes`.
+
+    Returns:
+        libellé de bras -> modèle -> emplacement (chemin local ou URI), dans l'ordre
+        de recherche de `_localiser` : le premier emplacement trouvé l'emporte.
+    """
+    import fsspec
+
+    suffixe, suffixe_htr = "_predictions.jsonl", "_htr_predictions.jsonl"
+    connus = sorted({*_prefixes_connus(), *bras.values()}, key=len, reverse=True)
+    libelles = {prefixe: libelle for libelle, prefixe in bras.items()}
+
+    sources: list[tuple[str, list[str]]] = []
+    dossier = Path(dossier)
+    if dossier.is_dir():
+        sources.append((str(dossier), [p.name for p in dossier.iterdir()]))
+    for racine in _racines_distantes(prefixe_s3):
+        try:
+            fs, chemin = fsspec.core.url_to_fs(racine)
+            noms = [Path(str(e)).name for e in fs.ls(chemin, detail=False)]
+        except FileNotFoundError:  # racine absente : rien à inventorier
+            continue
+        except Exception as exc:  # noqa: BLE001 — injoignable : le dire, sinon « aucun run »
+            # Une racine illisible (identifiants S3 expirés, réseau) se confondrait sinon
+            # avec une racine vide, et l'inventaire mentirait par omission.
+            logger.warning("%s illisible (%s : %s) : ignoré.", racine, type(exc).__name__, exc)
+            continue
+        sources.append((racine, noms))
+
+    trouves: dict[str, dict[str, str]] = {libelle: {} for libelle in bras}
+    for racine, noms in sources:
+        for nom in noms:
+            if not nom.endswith(suffixe) or nom.endswith(suffixe_htr):
+                continue
+            run = nom.removesuffix(suffixe)
+            prefixe = next((p for p in connus if run.startswith(p + "_")), None)
+            if prefixe not in libelles:
+                continue
+            modele = run[len(prefixe) + 1 :]
+            trouves[libelles[prefixe]].setdefault(modele, f"{racine.rstrip('/')}/{nom}")
+    return trouves
+
+
 def charger_series(
     modeles: list[str],
     bras: dict[str, str],
     dossier: str | Path = "data/processed",
+    prefixe_s3: str | None = None,
 ) -> list[Serie]:
     """Charge chaque couple (modèle, bras) disponible, exclusions D8 appliquées.
 
@@ -139,6 +235,7 @@ def charger_series(
         modeles: modèles à comparer.
         bras: libellé de bras -> préfixe de run.
         dossier: dossier des prédictions.
+        prefixe_s3: racine distante, voir `_racines_distantes`.
 
     Returns:
         Les séries trouvées ; un fichier absent est simplement omis.
@@ -147,7 +244,7 @@ def charger_series(
     series: list[Serie] = []
     for i, modele in enumerate(modeles):
         for j, (libelle, prefixe) in enumerate(bras.items()):
-            chemin = _localiser(dossier, prefixe, modele)
+            chemin = _localiser(dossier, prefixe, modele, prefixe_s3)
             if chemin is None:
                 continue
             df, _ = filtrer_evaluables(load_predictions(chemin))
@@ -357,9 +454,11 @@ def _classe(x: float, seuil: float = 0.0) -> str:
     return "bon" if x > seuil else ("mauvais" if x < -seuil else "neutre")
 
 
-def _marqueur(forme: str, x: float, y: float, couleur: str, titre: str) -> str:
+def _marqueur(
+    forme: str, x: float, y: float, couleur: str, titre: str, rayon: float = _RAYON
+) -> str:
     """Un marqueur SVG, avec anneau de surface pour rester lisible s'ils se recouvrent."""
-    r = _RAYON
+    r = rayon
     fin = f'fill="{couleur}" stroke="var(--surface-1)" stroke-width="1.4" opacity="0.9">'
     fin += f"<title>{html.escape(titre)}</title>"
     if forme == "cercle":
@@ -641,11 +740,293 @@ def _section_par_item(rapport: Rapport) -> str:
     )
 
 
+#: Écart vertical entre deux bras d'une même ligne, dans les panneaux par modèle : chaque
+#: bras a sa sous-ligne, pour que les intervalles ne se recouvrent pas.
+_PAS_BRAS = 7.0
+_RAYON_PANNEAU = 3.2
+
+
+def _correct_par_item(serie: Serie) -> dict[str, dict[str, bool]]:
+    """item_id -> copy_id -> le code du modèle est-il celui de l'expert ?"""
+    d: dict[str, dict[str, bool]] = defaultdict(dict)
+    for r in serie.records:
+        d[r["item_id"]][r["copy_id"]] = r["y_true"] == r["y_pred"]
+    return d
+
+
+def ecart_apparie(
+    bras: dict[str, bool], reference: dict[str, bool]
+) -> tuple[float, float, float] | None:
+    """Écart d'accord bras − référence sur un item, avec son IC 95 % apparié.
+
+    Sur un item, chaque copie donne UNE observation par bras, et les deux bras jugent
+    la même copie : l'écart se calcule donc copie par copie (+1, 0 ou −1), ce qui
+    retire la variabilité propre aux copies — un IC de deux proportions
+    indépendantes serait bien trop large. Approximation normale sur ces écarts. Quand
+    aucune copie ne change de verdict, l'intervalle se réduit à zéro : il dit alors
+    seulement que les deux bras ont rendu les mêmes verdicts sur cet item.
+
+    Args:
+        bras: copy_id -> verdict correct du bras testé.
+        reference: copy_id -> verdict correct de la référence.
+
+    Returns:
+        Le triplet (écart, borne basse, borne haute), en proportion, ou None si moins
+        de deux copies sont communes.
+    """
+    copies = set(bras) & set(reference)
+    n = len(copies)
+    if n < 2:
+        return None
+    d = [int(bras[c]) - int(reference[c]) for c in copies]
+    moyenne = sum(d) / n
+    variance = sum((x - moyenne) ** 2 for x in d) / (n - 1)
+    demi = 1.96 * math.sqrt(variance / n)
+    return moyenne, moyenne - demi, moyenne + demi
+
+
+def _panneau_intervalles(
+    items: list[GridItem],
+    rangs: dict[str, int],
+    points: dict[str, dict[str, tuple[float, float, float]]],
+    formes: dict[str, str],
+    couleur: str,
+    domaine: tuple[float, float],
+    ticks: list[float],
+    fmt,
+    titre: str,
+    sous_titre: str,
+    repere: float | None = None,
+    marques: set[str] | None = None,
+) -> str:
+    """Une ligne par item, une sous-ligne par bras : point et intervalle de confiance.
+
+    Args:
+        items: items dans l'ordre d'affichage.
+        rangs: item_id -> position dans la dictée.
+        points: item_id -> bras -> (valeur, borne basse, borne haute).
+        formes: bras -> forme du marqueur, dans l'ordre des sous-lignes (position fixe
+            d'un item à l'autre, pour qu'un bras se suive d'un coup d'œil).
+        couleur: couleur du modèle.
+        domaine: bornes de l'axe horizontal.
+        ticks: graduations.
+        fmt: formatage d'une valeur de l'axe.
+        titre: titre de la figure.
+        sous_titre: phrase de lecture.
+        repere: abscisse d'une verticale de référence (0 pour les écarts).
+        marques: items dont le libellé est suivi de ★.
+
+    Returns:
+        La figure HTML (SVG en ligne).
+    """
+    bas, haut = domaine
+    n = max(len(formes), 1)
+    hl = max(_HAUTEUR_LIGNE, _PAS_BRAS * n + 6)
+    hauteur = _MARGE_H + len(items) * hl + _MARGE_B
+    largeur = _MARGE_G + _LARGEUR_TRACE + _MARGE_D
+    marques = marques or set()
+
+    def px(v: float) -> float:
+        return _MARGE_G + (max(bas, min(haut, v)) - bas) / (haut - bas) * _LARGEUR_TRACE
+
+    legende = ['<div class="leg"><div class="leg-bloc"><span class="leg-tit">Bras</span>']
+    for libelle, forme in formes.items():
+        legende.append(
+            f'<span class="leg-item"><svg width="14" height="14" aria-hidden="true">'
+            f"{_marqueur(forme, 7, 7, couleur, '')}</svg>{html.escape(libelle)}</span>"
+        )
+    legende.append("</div></div>")
+
+    out = [
+        f'<figure class="fig"><figcaption class="fig-tit">{html.escape(titre)}</figcaption>',
+        f"<p class='fig-sub'>{sous_titre}</p>",
+        "".join(legende),
+        f'<div class="scroll"><svg viewBox="0 0 {largeur} {hauteur}" width="{largeur}" '
+        f'height="{hauteur}" role="img" aria-label="{html.escape(titre)}">',
+    ]
+    for t in ticks:
+        x = px(t)
+        out.append(
+            f'<line class="axe-grille" x1="{x:.1f}" y1="{_MARGE_H - 12}" x2="{x:.1f}" '
+            f'y2="{hauteur - _MARGE_B + 4}"/>'
+            f'<text class="axe-lbl" x="{x:.1f}" y="{_MARGE_H - 20}" text-anchor="middle">'
+            f"{fmt(t)}</text>"
+        )
+    if repere is not None:
+        out.append(
+            f'<line x1="{px(repere):.1f}" y1="{_MARGE_H - 12}" x2="{px(repere):.1f}" '
+            f'y2="{hauteur - _MARGE_B + 4}" stroke="#52514e" stroke-width="1.2"/>'
+        )
+    for rang, item in enumerate(items):
+        y_centre = _MARGE_H + rang * hl + hl / 2
+        if rang % 2 == 0:
+            out.append(
+                f'<rect class="bande" x="{_MARGE_G}" y="{y_centre - hl / 2:.1f}" '
+                f'width="{_LARGEUR_TRACE}" height="{hl:.1f}"/>'
+            )
+        etoile = " ★" if item.item_id in marques else ""
+        libelle = html.escape(f"{rangs[item.item_id]:>2}. {item.attendu}{etoile}")
+        out.append(
+            f'<text class="item-lbl" x="{_MARGE_G - 10}" y="{y_centre + 3.5:.1f}" '
+            f'text-anchor="end">{libelle}</text>'
+        )
+        for k, (bras, forme) in enumerate(formes.items()):
+            p = points.get(item.item_id, {}).get(bras)
+            if p is None:
+                continue
+            v, lo, hi = p
+            y = y_centre + (k - (n - 1) / 2) * _PAS_BRAS
+            out.append(
+                f'<line x1="{px(lo):.1f}" y1="{y:.1f}" x2="{px(hi):.1f}" y2="{y:.1f}" '
+                f'stroke="{couleur}" stroke-width="1.3" opacity="0.5"/>'
+            )
+            out.append(
+                _marqueur(
+                    forme,
+                    px(v),
+                    y,
+                    couleur,
+                    f"{item.attendu} — {bras} : {fmt(v)} [{fmt(lo)} ; {fmt(hi)}]",
+                    rayon=_RAYON_PANNEAU,
+                )
+            )
+    out.append("</svg></div></figure>")
+    return "".join(out)
+
+
+def _graduations_ecart(limite: float) -> tuple[float, list[float]]:
+    """Borne symétrique de l'axe des écarts, arrondie à un pas lisible, et ses graduations."""
+    pas = 0.05 if limite <= 0.2 else 0.1 if limite <= 0.5 else 0.25
+    borne = min(1.0, max(pas, math.ceil(limite / pas - 1e-9) * pas))
+    n = int(round(2 * borne / pas))
+    return borne, [round(-borne + pas * i, 4) for i in range(n + 1)]
+
+
+def _section_accord_par_modele(rapport: Rapport, reference: str) -> str:
+    """Section 3 : accord par item, un panneau par modèle, un point par bras.
+
+    Deux figures par modèle, dans le même ordre d'items (trié sur la référence, les
+    items les plus ratés en haut) pour qu'on passe de l'une à l'autre ligne à ligne :
+    l'accord absolu avec son IC de Wilson, puis l'écart de chaque bras à la référence,
+    apparié copie par copie.
+    """
+    par_modele: dict[str, dict[str, Serie]] = defaultdict(dict)
+    for s in rapport.series:
+        par_modele[s.modele][s.bras] = s
+    rangs = {it.item_id: rapport.items.index(it) + 1 for it in rapport.items}
+
+    blocs = []
+    for modele, series in par_modele.items():
+        formes = {libelle: s.forme for libelle, s in series.items()}
+        couleur = next(iter(series.values())).couleur
+        corrects = {libelle: _correct_par_item(s) for libelle, s in series.items()}
+        etalon = reference if reference in series else next(iter(series))
+
+        # Pas de lambda : elle capturerait une variable de la boucle (ruff B023).
+        accord_etalon = rapport.par_item[series[etalon].cle]
+        valeurs = [accord_etalon.get(it.item_id, {}).get("accord", 1.0) for it in rapport.items]
+        items = [rapport.items[i] for i in sorted(range(len(valeurs)), key=valeurs.__getitem__)]
+
+        # Une observation par copie et par item : pas de grappe, donc Wilson sans
+        # design effect (même raisonnement que la prévalence par item du site).
+        absolus: dict[str, dict[str, tuple[float, float, float]]] = defaultdict(dict)
+        for it in rapport.items:
+            for libelle in series:
+                verdicts = corrects[libelle].get(it.item_id)
+                if verdicts:
+                    ci = wilson_interval(sum(verdicts.values()), len(verdicts))
+                    absolus[it.item_id][libelle] = (ci.estimate, ci.lower, ci.upper)
+
+        bloc = [
+            f"<h3>{html.escape(modele)}</h3>",
+            _panneau_intervalles(
+                items,
+                rangs,
+                absolus,
+                formes,
+                couleur,
+                (0.0, 1.0),
+                [0, 0.25, 0.5, 0.75, 1.0],
+                lambda t: f"{t * 100:.0f} %",
+                f"Accord par item — {modele}",
+                f"Part des copies où le code du modèle coïncide avec celui de l'expert, "
+                f"bras par bras. Items triés par accord croissant sous « {etalon} ». "
+                "Trait = IC de Wilson à 95 %.",
+            ),
+        ]
+
+        testes = [libelle for libelle in series if libelle != etalon]
+        if reference not in series:
+            bloc.append(
+                f"<p class='note'>Bras « {html.escape(reference)} » absent pour ce modèle : "
+                "écarts non calculés.</p>"
+            )
+        elif testes:
+            ecarts: dict[str, dict[str, tuple[float, float, float]]] = defaultdict(dict)
+            hausses: Counter[str] = Counter()
+            baisses: Counter[str] = Counter()
+            marques: set[str] = set()
+            for it in rapport.items:
+                verdicts_ref = corrects[etalon].get(it.item_id, {})
+                for libelle in testes:
+                    e = ecart_apparie(corrects[libelle].get(it.item_id, {}), verdicts_ref)
+                    if e is None:
+                        continue
+                    ecarts[it.item_id][libelle] = e
+                    if e[1] > 0:
+                        hausses[libelle] += 1
+                        marques.add(it.item_id)
+                    elif e[2] < 0:
+                        baisses[libelle] += 1
+                        marques.add(it.item_id)
+            limite = max(
+                (abs(b) for d in ecarts.values() for e in d.values() for b in e[1:]),
+                default=0.1,
+            )
+            borne, ticks = _graduations_ecart(limite)
+            bilan = " · ".join(
+                f"<strong>{html.escape(libelle)}</strong> : {hausses[libelle]} en hausse, "
+                f"{baisses[libelle]} en baisse"
+                for libelle in testes
+            )
+            bloc.append(
+                _panneau_intervalles(
+                    items,
+                    rangs,
+                    ecarts,
+                    {libelle: formes[libelle] for libelle in testes},
+                    couleur,
+                    (-borne, borne),
+                    ticks,
+                    lambda t: f"{t * 100:+.0f} pts",
+                    f"Écart d'accord à « {etalon} », par item — {modele}",
+                    "Accord du bras moins accord de la référence, en points, mesuré copie "
+                    "par copie sur les mêmes copies. À droite du trait, le bras fait mieux. "
+                    f"★ = au moins un bras dont l'IC à 95 % exclut zéro. {bilan}. Avec "
+                    f"{len(rapport.items)} items testés, environ "
+                    f"{0.05 * len(rapport.items):.0f} faux positifs par bras sont attendus "
+                    "au seul hasard : une ★ isolée n'est pas une preuve.",
+                    repere=0.0,
+                    marques=marques,
+                )
+            )
+        blocs.append("".join(bloc))
+
+    return (
+        "<h2>3. Accord par item, bras par bras</h2>"
+        "<p class='note'>Un panneau par modèle, un marqueur par bras. Le premier graphique "
+        "donne l'accord de chaque bras avec l'expert ; le second, l'écart de chaque bras à "
+        f"la référence « {html.escape(reference)} », dans le même ordre d'items. Les deux "
+        f"portent sur les {rapport.n_copies} copies communes à toutes les séries.</p>"
+        + "".join(blocs)
+    )
+
+
 def _section_taux_faute(rapport: Rapport) -> str:
-    """Section 3 (5 à l'origine) : où tombe chaque modèle face à la difficulté réelle."""
+    """Section 4 (5 à l'origine) : où tombe chaque modèle face à la difficulté réelle."""
     items = sorted(rapport.items, key=lambda it: -rapport.err_humain.get(it.item_id, 0.0))
     return (
-        "<h2>3. Où tombe chaque modèle par rapport à la difficulté réelle des items ?</h2>"
+        "<h2>4. Où tombe chaque modèle par rapport à la difficulté réelle des items ?</h2>"
         "<p class='note'>L'abscisse n'est plus une performance : c'est le <strong>taux de "
         "faute attribué aux élèves</strong>. Les items sont classés du plus raté au mieux "
         "réussi d'après l'expert. Un modèle bien calibré pose ses marqueurs sur le repère "
@@ -666,7 +1047,7 @@ def _section_taux_faute(rapport: Rapport) -> str:
 
 
 def _section_par_type(rapport: Rapport) -> str:
-    """Section 4 (7 à l'origine) : mots et ponctuation, deux tâches distinctes."""
+    """Section 5 (7 à l'origine) : mots et ponctuation, deux tâches distinctes."""
     n_mots = sum(1 for it in rapport.items if it.type != "ponctuation")
     n_ponct = len(rapport.items) - n_mots
 
@@ -710,7 +1091,7 @@ def _section_par_type(rapport: Rapport) -> str:
         precedent = s.modele
 
     return (
-        "<h2>4. Mots ou ponctuation : deux tâches distinctes</h2>"
+        "<h2>5. Mots ou ponctuation : deux tâches distinctes</h2>"
         f"<p class='note'>La grille compte {n_mots} mots et {n_ponct} signes de ponctuation. "
         "Ce ne sont pas les mêmes jugements : un mot peut être mal orthographié de mille "
         "façons, un signe n'a que trois issues et les élèves l'omettent bien plus souvent. Un "
@@ -759,6 +1140,7 @@ def rendre_html(rapport: Rapport, reference: str = "référence", n_boot: int = 
         "écartés (décision D8).</div>"
         + _section_comparaison(rapport, reference, n_boot)
         + _section_par_item(rapport)
+        + _section_accord_par_modele(rapport, reference)
         + _section_taux_faute(rapport)
         + _section_par_type(rapport)
         + "<footer>Agrégats uniquement : ni image, ni transcription, ni donnée identifiante. "
@@ -774,6 +1156,7 @@ def construire_rapport(
     grille: str | Path = "configs/grille_dictee_2015.json",
     reference: str = "référence",
     n_boot: int = 400,
+    prefixe_s3: str | None = None,
 ) -> tuple[str, Rapport]:
     """Chaîne complète : chargement, agrégation, rendu.
 
@@ -784,6 +1167,8 @@ def construire_rapport(
         grille: chemin de la grille de codage.
         reference: libellé du bras servant d'étalon.
         n_boot: nombre de tirages du bootstrap.
+        prefixe_s3: racine distante, consultée si un run manque dans `dossier`.
+            [défaut : `S3_PREDICTIONS_PREFIX` ; chaîne vide = local seulement]
 
     Returns:
         Le couple (HTML, agrégats).
@@ -791,7 +1176,7 @@ def construire_rapport(
     Raises:
         RuntimeError: si aucune série n'a pu être chargée.
     """
-    series = charger_series(modeles, bras or BRAS_PAR_DEFAUT, dossier)
+    series = charger_series(modeles, bras or BRAS_PAR_DEFAUT, dossier, prefixe_s3)
     if not series:
         raise RuntimeError(
             f"Aucun run trouvé dans {dossier} pour les modèles {modeles}. "
