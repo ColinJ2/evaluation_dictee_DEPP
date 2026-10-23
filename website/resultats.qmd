@@ -809,6 +809,50 @@ les plus problématiques.
 #| echo: false
 #| warning: false
 #| output: asis
+def ordre_items(runs, colonne, croissant=True):
+    """Série de référence de la vue et items triés selon sa `colonne` (NaN en bas)."""
+    reference = next(
+        (r for r in runs.values() if r.approche == A.APPROCHE_REFERENCE),
+        next(iter(runs.values())),
+    )
+    ordre = reference.items.sort_values(
+        colonne, ascending=croissant, na_position="last"
+    ).index.tolist()
+    return reference, ordre
+
+
+def tableau_par_item(runs, ordre, colonne, formateur, legende):
+    """Tableau d'une métrique par item, une colonne par série, dans l'ordre du graphique."""
+    lignes = []
+    for item in ordre:
+        ligne = [A.libelle_item(item, MOTS, RANGS).replace("|", "\\|")]
+        for r in runs.values():
+            it = r.items
+            ligne.append(
+                A.ic(it.at[item, colonne], it.at[item, f"{colonne}_lo"],
+                     it.at[item, f"{colonne}_hi"], formateur)
+                if item in it.index else "—"
+            )
+        lignes.append(ligne)
+    return A.table_markdown(["Item"] + [r.serie for r in runs.values()], lignes, legende)
+
+
+def onglets_graphique_tableau(figure, tableau):
+    """Graphique et tableau de la même métrique, en deux onglets."""
+    return (
+        "\n::: {.panel-tabset}\n\n### Graphique\n\n" + figure
+        + "\n\n### Tableau\n\n" + tableau + "\n\n:::\n"
+    )
+
+
+def kappa_fmt(x):
+    return A.num(x, 2)
+
+
+def points_signes(x):
+    return "—" if pd.isna(x) else f"{float(x) * 100:+.1f} pts"
+
+
 def figure_par_item(runs, modele, colonne, echelle, seuils, xlabel, nom, legende):
     """Une métrique par item et son IC, une série par run, items triés par la référence.
 
@@ -827,11 +871,7 @@ def figure_par_item(runs, modele, colonne, echelle, seuils, xlabel, nom, legende
         d'un item sans aucune erreur, ni de l'expert ni du modèle) sont rangés en
         bas, sans point.
     """
-    reference = next(
-        (r for r in runs.values() if r.approche == A.APPROCHE_REFERENCE),
-        next(iter(runs.values())),
-    )
-    ordre = reference.items.sort_values(colonne, na_position="last").index.tolist()
+    reference, ordre = ordre_items(runs, colonne)
     fig, ax = plt.subplots(figsize=(9.5, 0.28 * len(ordre) + 1.5))
     y = np.arange(len(ordre))
     decalages = np.linspace(-0.2, 0.2, len(runs)) if len(runs) > 1 else [0]
@@ -861,14 +901,17 @@ def figure_par_item(runs, modele, colonne, echelle, seuils, xlabel, nom, legende
 for cle, runs in VUES.items():
     modele = VUES_DEF[cle].titre
     with A.vue_modele(cle, CLE_ACTIVE):
-        print(
-            figure_par_item(
-                runs, modele, "accord", 100, (85, 95), "Accord avec l'expert (%)",
-                "accord-item",
-                f"Accord modèle-expert par item — {modele}, trié par accord croissant. "
-                "Barres = IC Wilson 95 %.",
-            )
+        figure = figure_par_item(
+            runs, modele, "accord", 100, (85, 95), "Accord avec l'expert (%)",
+            "accord-item",
+            f"Accord modèle-expert par item — {modele}, trié par accord croissant. "
+            "Barres = IC Wilson 95 %.",
         )
+        tableau = tableau_par_item(
+            runs, ordre_items(runs, "accord")[1], "accord", A.pct,
+            f"Accord modèle-expert par item [IC Wilson 95 %] — `{modele}`",
+        )
+        print(onglets_graphique_tableau(figure, tableau))
 ```
 
 ## Kappa par item {#kappa-par-item}
@@ -895,14 +938,17 @@ selon l'échelle usuelle de Landis et Koch.
 for cle, runs in VUES.items():
     modele = VUES_DEF[cle].titre
     with A.vue_modele(cle, CLE_ACTIVE):
-        print(
-            figure_par_item(
-                runs, modele, "kappa", 1, (0.6, 0.8), "Kappa de Cohen avec l'expert",
-                "kappa-item",
-                f"Kappa de Cohen modèle-expert par item — {modele}, trié par kappa "
-                "croissant. Barres = IC asymptotique 95 % (Fleiss).",
-            )
+        figure = figure_par_item(
+            runs, modele, "kappa", 1, (0.6, 0.8), "Kappa de Cohen avec l'expert",
+            "kappa-item",
+            f"Kappa de Cohen modèle-expert par item — {modele}, trié par kappa "
+            "croissant. Barres = IC asymptotique 95 % (Fleiss).",
         )
+        tableau = tableau_par_item(
+            runs, ordre_items(runs, "kappa")[1], "kappa", kappa_fmt,
+            f"Kappa de Cohen modèle-expert par item [IC 95 %] — `{modele}`",
+        )
+        print(onglets_graphique_tableau(figure, tableau))
         non_definis = sorted(
             {i for r in runs.values() for i in r.items.index[r.items["kappa"].isna()]}
         )
@@ -954,13 +1000,7 @@ def figure_points_par_item(runs, modele, colonne, nom, titre, croissant=False, z
 
     `zero` centre la lecture sur 0 (biais signé) ; sinon l'axe part de 0 (taux).
     """
-    reference = next(
-        (r for r in runs.values() if r.approche == A.APPROCHE_REFERENCE),
-        next(iter(runs.values())),
-    )
-    ordre = reference.items.sort_values(
-        colonne, ascending=croissant, na_position="last"
-    ).index.tolist()
+    reference, ordre = ordre_items(runs, colonne, croissant)
     fig, ax = plt.subplots(figsize=(13, 0.28 * len(ordre) + 1.5))
     y = np.arange(len(ordre))
     decalages = np.linspace(-0.2, 0.2, len(runs)) if len(runs) > 1 else [0]
@@ -999,7 +1039,13 @@ for cle, runs in VUES.items():
     modele = VUES_DEF[cle].titre
     with A.vue_modele(cle, CLE_ACTIVE):
         for colonne, suffixe, titre in PANNEAUX_ERREURS:
-            print(figure_points_par_item(runs, modele, colonne, suffixe, titre))
+            tableau = tableau_par_item(
+                runs, ordre_items(runs, colonne, croissant=False)[1], colonne, A.pct,
+                f"{titre.split(' (')[0]} par item [IC Wilson 95 %] — `{modele}`",
+            )
+            print(onglets_graphique_tableau(
+                figure_points_par_item(runs, modele, colonne, suffixe, titre), tableau
+            ))
 ```
 
 ## Biais net par item {#biais-net-par-item}
@@ -1028,12 +1074,15 @@ observation par copie et par item.
 for cle, runs in VUES.items():
     modele = VUES_DEF[cle].titre
     with A.vue_modele(cle, CLE_ACTIVE):
-        print(
-            figure_points_par_item(
-                runs, modele, "biais_net", "biais-net",
-                "Biais net (prévalence modèle − expert, en points)", croissant=True, zero=True,
-            )
+        figure = figure_points_par_item(
+            runs, modele, "biais_net", "biais-net",
+            "Biais net (prévalence modèle − expert, en points)", croissant=True, zero=True,
         )
+        tableau = tableau_par_item(
+            runs, ordre_items(runs, "biais_net")[1], "biais_net", points_signes,
+            f"Biais net par item, prévalence modèle − expert [IC 95 %] — `{modele}`",
+        )
+        print(onglets_graphique_tableau(figure, tableau))
         lignes = []
         for r in runs.values():
             it = r.items
