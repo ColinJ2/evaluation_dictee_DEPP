@@ -257,8 +257,9 @@ du run qui compte, pas la façon dont il a été lancé.
 
 **Publier un prompt sur le site** (le comparer aux autres dans les menus) : lancer le
 run sur le **corpus complet** avec un `name` de config qui suit la convention
-`dictee<AAAA>_<approche>_<prompt>` (ex. `dictee2015_end2end_exemples`), puis l'exporter
-avec `--prompt exemples --dest-prefix s3://projet-production-ecrits-depp/prediction_depp`.
+`dictee<AAAA>_<approche>_<prompt>` (ex. `dictee2015_end2end_exemples`), via
+`launchers/launch_eval.sh --config <yaml> --prompt exemples` : le lanceur vérifie le nom
+et exporte par défaut vers `s3://projet-production-ecrits-depp/prediction_depp`.
 Le site lit année, approche, prompt et modèle dans le nom du fichier : rien à coder.
 Détails : `docs/decisions.md` (D12) et `src/evaluation_dictee/run_names.py`.
 

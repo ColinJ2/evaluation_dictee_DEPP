@@ -47,6 +47,6 @@ lancement, relance les copies en échec et exporte vers S3. Détails : `--help`,
   sur le site ; décision D9, `scripts/export_predictions.py` route selon l'effectif réel).
 - Publier un prompt sur le site : run sur le corpus complet, `name` de config au
   format `dictee<AAAA>_<end2end|two_stage>_<prompt>` (prompt sans tiret bas, `base` =
-  prompt par défaut), export avec `--prompt <prompt>` vers `prediction_depp/` (dossier
-  lu par le site). Le site lit tout dans le nom ; un nom non conforme est ignoré
+  prompt par défaut), lancé avec `--prompt <prompt>` : le lanceur refuse un nom non
+  conforme et exporte par défaut vers `prediction_depp/` (dossier lu par le site). Le site lit tout dans le nom ; un nom non conforme est ignoré
   (décision D12, `src/evaluation_dictee/run_names.py`).

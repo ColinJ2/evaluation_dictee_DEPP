@@ -41,6 +41,9 @@ DO_EXPORT=1
 EXPORT_EXPLICIT=0
 FORCE_EXPORT=0
 DEST_PREFIX=""
+# Dossier lu par le site : destination par défaut d'un run exporté (--prompt), pour
+# qu'un oubli de --dest-prefix ne range pas le run là où le site ne le voit pas.
+SITE_DEST_PREFIX="s3://projet-production-ecrits-depp/prediction_depp"
 PROMPT=""              # nom du prompt, obligatoire si export (cf. run_names.py)
 SKIP_CHECKS=0
 FOREGROUND=0
@@ -83,7 +86,8 @@ OPTIONS DE LANCEMENT
   --passes N               Nombre de passes max, relance des échecs incluse. [défaut : 3]
   --no-export              Ne pas exporter vers S3 à la fin.
   --export                 Forcer l'export même avec --limit.
-  --dest-prefix S3URI      Destination de l'export.   [défaut : $S3_PREDICTIONS_PREFIX]
+  --dest-prefix S3URI      Destination de l'export.   [défaut : dossier lu par le site,
+                           s3://projet-production-ecrits-depp/prediction_depp]
   --prompt NOM             Nom du prompt du run (ex. base). OBLIGATOIRE dès que le run
                            est exporté : il doit figurer dans le nom du run
                            (dictee<AAAA>_<approche>_<prompt>), vérifié AVANT le lancement.
@@ -93,8 +97,9 @@ OPTIONS DE LANCEMENT
   --foreground             Exécuter la chaîne dans le terminal (débogage, CI).
 
 EXEMPLES
-  launchers/launch_eval.sh --prompt base
-  launchers/launch_eval.sh --config configs/scoring/dictee_two_stage.yaml --prompt base
+  launchers/launch_eval.sh --prompt base                  # 2015, end-to-end
+  launchers/launch_eval.sh --config configs/scoring/dictee2021_two_stage.yaml --prompt base
+  launchers/launch_eval.sh --config configs/scoring/dictee2021_end2end_majponct.yaml --prompt majponct
   launchers/launch_eval.sh --model-name gemma4-26b-moe --prompt base
   launchers/launch_eval.sh --limit 5 --skip-checks        # fumée, 5 copies
   launchers/launch_eval.sh --status
@@ -187,6 +192,8 @@ verifier_prompt(sys.argv[1], sys.argv[2])' "$RUN_NAME" "$PROMPT" 2>&1); then
     die "Nom du run incompatible avec --prompt ${PROMPT}."
   fi
   ok "Prompt « ${PROMPT} » présent dans le nom du run (${RUN_NAME})"
+  [[ -n $DEST_PREFIX ]] || DEST_PREFIX="$SITE_DEST_PREFIX"
+  ok "export vers ${DEST_PREFIX}"
 }
 
 set_paths() {
@@ -379,7 +386,7 @@ launch() {
 
   local EXPORT_LABEL
   if (( DO_EXPORT == 1 )); then
-    EXPORT_LABEL="oui, à la fin du run (nom : ${RUN_NAME}_predictions.jsonl)"
+    EXPORT_LABEL="oui, à la fin du run (${DEST_PREFIX}/${RUN_NAME}_predictions.jsonl)"
   elif [[ -n $LIMIT_CLI ]]; then
     EXPORT_LABEL="non — run partiel (--limit). Forcer avec --export."
   else
@@ -525,14 +532,14 @@ chain() {
   if (( DO_EXPORT == 0 )); then
     echo "#EXPORT skipped=--no-export"
     echo "Export S3 non demandé. Pour l'exporter plus tard :"
-    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>}"
+    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>} --dest-prefix ${DEST_PREFIX:-$SITE_DEST_PREFIX}"
     return 0
   fi
   if (( last_rc != 0 )); then
     echo "#EXPORT skipped=run_incomplet rc=${last_rc}"
     echo "Le run s'est terminé en erreur : pas d'export automatique (un JSONL"
     echo "incomplet écraserait un export S3 plus complet). Après diagnostic :"
-    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>}"
+    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>} --dest-prefix ${DEST_PREFIX:-$SITE_DEST_PREFIX}"
     return 0
   fi
 
@@ -576,7 +583,7 @@ PY
   elif (( grc != 0 )); then
     echo "#EXPORT skipped=verification_impossible rc=${grc}"
     echo "Accès S3 non vérifiable : export manuel après diagnostic —"
-    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>}"
+    echo "  uv run scripts/export_predictions.py --run-name ${RUN_NAME} --no-experimentation --prompt ${PROMPT:-<prompt>} --dest-prefix ${DEST_PREFIX:-$SITE_DEST_PREFIX}"
     return 0
   fi
 
@@ -584,8 +591,9 @@ PY
   # ne peut pas déduire seul la destination et l'exigerait sinon explicitement. Ce
   # lanceur ne traite QUE l'échantillon complet (un `limit` dans le YAML fait échouer
   # probe_config plus haut) ; le seul cas contraire est --limit + --export forcé par
-  # un humain qui sait ce qu'il fait — pour lui aussi, la destination reste
-  # `predictions/`, comportement inchangé depuis avant l'introduction du sous-dossier.
+  # un humain qui sait ce qu'il fait. La destination vient de check_prompt (dossier
+  # du site par défaut) ; sans elle, export_predictions.py retombe sur
+  # S3_PREDICTIONS_PREFIX.
   local -a export_cmd=( uv run scripts/export_predictions.py --run-name "$RUN_NAME" --no-experimentation
                         --prompt "$PROMPT" )
   if [[ -n $DEST_PREFIX ]]; then export_cmd+=( --dest-prefix "$DEST_PREFIX" ); fi
