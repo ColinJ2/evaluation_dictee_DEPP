@@ -641,6 +641,22 @@ status() {
       pdone=$(sed 's/.*done=\([0-9]*\).*/\1/' <<<"$pstart")
       # shellcheck disable=SC2001
       pstart=$(sed 's/.*epoch=\([0-9]*\).*/\1/' <<<"$pstart")
+      # Le chargement S3 (~5 min) n'écrit aucune copie : mesurer depuis le début de
+      # la passe sous-estimait le débit et repoussait la fin estimée (20 h annoncées
+      # pour ~11 h réelles). On part donc de la fin du chargement, la ligne « N copies
+      # au total », horodatée [HH:MM:SS] par rich (dernier horodatage qui la précède
+      # si rich l'a omis, même seconde). Sans elle, chargement en cours : rien à mesurer.
+      local tload
+      tload=$(awk '/^#PASS_START/{n=NR} END{print n}' "$log")
+      tload=$(tail -n +"${tload:-1}" "$log" \
+        | awk 'match($0, /\[[0-9][0-9]:[0-9][0-9]:[0-9][0-9]\]/){t=substr($0, RSTART+1, 8)}
+               /copies au total/{print t; exit}')
+      if [[ -n $tload ]]; then
+        tload=$(date -d "$(date -d "@${pstart}" +%F) ${tload}" +%s 2>/dev/null || echo "")
+        # Chargement terminé après minuit : l'horodatage est celui du lendemain.
+        if [[ -n $tload ]] && (( tload < pstart )); then tload=$(( tload + 86400 )); fi
+        [[ -n $tload ]] && pstart=$tload
+      fi
       now=$(date +%s); elapsed=$(( now - pstart )); made=$(( done_n - pdone ))
       if (( elapsed > 60 && made > 0 )); then
         rate=$(awk -v m="$made" -v e="$elapsed" 'BEGIN{printf "%.1f", m*3600/e}')
