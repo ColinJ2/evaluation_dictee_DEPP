@@ -102,3 +102,38 @@ def test_configs_majponct() -> None:
             exclude={"name", "prompt"}
         )
         assert cfg.prompt.model_dump(exclude=OPTIONS) == (base.prompt.model_dump(exclude=OPTIONS))
+
+
+def test_petits_mots_absents_par_defaut_et_ajoutes_sur_option() -> None:
+    assert "PETITS MOTS" not in _texte(build_dictation_prompt("Le soir.", ITEMS, PromptConfig()))
+    cfg = PromptConfig(case_rules=True, doubt_word_is_error=True, small_words_rules=True)
+    texte = _systeme(build_dictation_prompt("Le soir.", ITEMS, cfg))
+    assert "17 - PETITS MOTS" in texte
+    assert texte.index("16 - MOTS, EN CAS DE DOUTE") < texte.index("17 - PETITS MOTS")
+    assert "DOUBLE ERREUR" in texte
+    assert "un même trait ne compte qu'UNE fois" in texte
+
+
+def test_petits_mots_two_stage() -> None:
+    etape1 = _systeme(build_transcription_prompt(small_words_rules=True))
+    assert "8 - PETITS MOTS ET LETTRES PROCHES" in etape1
+    etape2 = _systeme(
+        build_text_coding_prompt("Le soir.", "le soir", ITEMS, small_words_rules=True)
+    )
+    assert "8 - PETITS MOTS" in etape2 and "DOUBLE ERREUR" in etape2
+
+
+def test_configs_petitsmots() -> None:
+    for app in ("end2end", "two_stage"):
+        cfg = load_config(f"configs/scoring/dictee2021_{app}_petitsmots.yaml")
+        nom = analyser_nom_run(f"{cfg.name}_qwen3-6-35b-moe")
+        assert nom is not None and nom.prompt == "petitsmots" and nom.annee == 2021
+        majponct = load_config(f"configs/scoring/dictee2021_{app}_majponct.yaml")
+        # Seule l'option petits mots (et le nom) diffère de `majponct`.
+        assert cfg.prompt.small_words_rules and not majponct.prompt.small_words_rules
+        assert cfg.model_dump(exclude={"name", "prompt"}) == majponct.model_dump(
+            exclude={"name", "prompt"}
+        )
+        assert cfg.prompt.model_dump(exclude={"small_words_rules"}) == (
+            majponct.prompt.model_dump(exclude={"small_words_rules"})
+        )

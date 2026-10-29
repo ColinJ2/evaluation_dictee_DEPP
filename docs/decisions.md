@@ -360,3 +360,53 @@ pour des consignes optionnelles ; les consignes y sont ajoutées au message syst
 compilation (`prompts._ajouter_au_systeme`), sans nouvelle version Langfuse. La trace
 pointe donc la version du template, et la config versionnée dit quelles options étaient
 actives.
+
+## D14 — Prompt `petitsmots` : petits mots et lettres proches (23/10/2026)
+
+**Constat** (2021, qwen3-6, prompt `base`) : l'end-to-end valide 62 % des fautes de
+l'élève sur les mots de 1-2 lettres, contre 44 % en two_stage et 37 % sur les mots de 5
+lettres ou plus. Les trois « à » (items 49, 58, 81) valident 70 à 79 % des fautes.
+`majponct` n'y change rien (62 %) : la règle de doute ne joue pas, car le modèle n'hésite
+pas. Sur les fautes qu'il valide, il lit le mot ATTENDU (« S' » 96 %, « a » 96 %, « ils »
+79 %) là où le two_stage, qui transcrit sans la référence, lit sur les mêmes copies
+« Si », « as »/« sa », « il ». La référence souffle la réponse quand l'image apporte peu
+d'indices.
+
+**Décision** : option `small_words_rules` (règle 17 en end-to-end, règle 8 aux deux
+étapes du two_stage), ajoutée à `majponct` : lire avant de comparer ; « à » seulement
+avec un accent grave visible ; « as », « sa », « à » pour « a » = 9 ; s/r jugés à la
+forme, s final vérifié ; un trait d'élision compté une seule fois (apostrophe OU lettre) ;
+double erreur point absent (0) + minuscule du mot suivant (9).
+
+**À confirmer avec la DEPP** : un accent dans le mauvais sens (« á ») est codé faute.
+Sur les items 49 et 58, le two_stage lit lui aussi « à » sur la plupart des fautes que
+l'expert relève : à vérifier à l'œil (accent inversé, mal placé, effacé par le 1 bit ?).
+
+**Non retenu ici** : `reference_items_only` (phrase de référence retirée, bras E1), qui
+irait dans le même sens mais changerait deux choses à la fois ; à tester comme bras
+séparé si `petitsmots` ne suffit pas.
+
+## D15 — Signal de doute `lecture_alternative` (prompt `doute`, 23/10/2026)
+
+**Constat** : aucune confiance exploitable. `request_logprobs` n'est branché nulle part ;
+la « confiance » était un champ `confidence` auto-déclaré dans le JSON, absent des
+prompts 2021 (vide sur 99 % des items) et inutile en 2015 (AUC 0,53 contre le désaccord
+avec l'expert, 1,0 sur 91 % des items, et 90 % des sur-corrections à 1,0).
+
+**Décision** : option `report_doubt` (règle 18, end-to-end), ajoutée à `petitsmots`.
+Chaque item porte un champ `lecture_alternative`, déclaré AVANT `code` dans le schéma :
+l'autre lecture du mot quand deux lectures des TRAITS restent possibles, `""` sinon. Le
+champ suit son token au ré-alignement et est écrit dans le JSONL.
+
+- **Contre la surinterprétation** (exigence de l'utilisateur) : vide « dans la très
+  grande majorité des cas » ; pas de doute par prudence, ni parce que la lecture diffère
+  du mot attendu, ni pour une écriture maladroite mais lisible ; jamais le mot attendu
+  comme alternative s'il n'est pas lisible ainsi.
+- **Bénéfice du doute** : hésitation de forme sur une lettre que l'écriture d'un enfant
+  rend ambiguë (s/r, n/m, n/u, e/l, a/o), avec le mot attendu parmi les deux lectures →
+  code 1. Prime sur la règle 16 (doute = 9), qui reste valable pour les autres doutes.
+
+**Critères d'évaluation** : part d'items avec une alternative non vide (quelques % au
+plus, sinon le signal ne vaut rien) ; AUC « alternative non vide → désaccord avec
+l'expert », à comparer au désaccord end-to-end / two_stage ; effet du bénéfice du doute
+sur la sur-correction des mots concernés.

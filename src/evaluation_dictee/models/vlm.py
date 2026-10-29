@@ -113,7 +113,9 @@ def log_if_truncated(response: Any, copy_id: str, max_tokens: int) -> bool:
     return True
 
 
-def _items_json_schema(chain_of_thought: bool, count_items: bool = False) -> dict[str, Any]:
+def _items_json_schema(
+    chain_of_thought: bool, count_items: bool = False, report_doubt: bool = False
+) -> dict[str, Any]:
     """Schéma JSON de la réponse attendue (méthode C) pour le décodage contraint vLLM.
 
     Contraint la structure de chaque item, pas leur nombre (variable selon la copie).
@@ -128,6 +130,8 @@ def _items_json_schema(chain_of_thought: bool, count_items: bool = False) -> dic
     Args:
         chain_of_thought: Si True, ajoute le champ obligatoire `comparaison` à chaque item.
         count_items: Si True, exige un champ `n_items_lus` en tête de réponse.
+        report_doubt: Si True, ajoute `lecture_alternative` à chaque item, AVANT le
+            code : l'hésitation doit être déclarée avant la décision qu'elle conditionne.
 
     Returns:
         Schéma JSON de la réponse attendue (objet avec une liste `items`).
@@ -136,6 +140,8 @@ def _items_json_schema(chain_of_thought: bool, count_items: bool = False) -> dic
         "item_id": {"type": "string"},
         "transcription": {"type": "string"},
     }
+    if report_doubt:
+        properties["lecture_alternative"] = {"type": "string"}
     if chain_of_thought:
         properties["comparaison"] = {"type": "string"}
     properties["code"] = {"type": "string"}
@@ -261,6 +267,7 @@ class VLMScorer(Scorer):
                     "schema": _items_json_schema(
                         self.prompt_config.chain_of_thought,
                         self.prompt_config.count_items,
+                        self.prompt_config.report_doubt,
                     ),
                 },
             }
@@ -372,6 +379,7 @@ class VLMScorer(Scorer):
         trans_seq = [it.get("transcription") for it in raw_items]
         conf_seq = [it.get("confidence") for it in raw_items]
         comp_seq = [it.get("comparaison") for it in raw_items]
+        alt_seq = [it.get("lecture_alternative") for it in raw_items]
         ordres = [comparaison_avant_code(it) for it in raw_items]
         self._alerter_si_cot_decorative(copy, ordres)
 
@@ -391,7 +399,12 @@ class VLMScorer(Scorer):
         # Filet de sécurité : ré-aligner si un décalage est détecté.
         if codes_seq and needs_realignment(expected_words, trans_seq):
             aligned = best_realignment(
-                expected_words, codes_seq, trans_seq, conf_seq, comparaisons=comp_seq
+                expected_words,
+                codes_seq,
+                trans_seq,
+                conf_seq,
+                comparaisons=comp_seq,
+                alternatives=alt_seq,
             )
             # L'ordre des clés est une propriété de la RÉPONSE, pas d'un item en
             # particulier : après ré-alignement il vaut donc pour toute la copie.
@@ -404,6 +417,7 @@ class VLMScorer(Scorer):
                     transcription=a.transcription,
                     comparaison=a.comparaison,
                     comparaison_avant_code=ordre_copie,
+                    lecture_alternative=a.lecture_alternative,
                 )
                 for item_id, a in zip(copy.item_ids, aligned, strict=False)
             ]
@@ -425,6 +439,7 @@ class VLMScorer(Scorer):
                         transcription=entry.get("transcription"),
                         comparaison=entry.get("comparaison"),
                         comparaison_avant_code=comparaison_avant_code(entry),
+                        lecture_alternative=entry.get("lecture_alternative"),
                     )
                 )
         self._alerter_si_comptage_incoherent(copy, items, n_items_lus)

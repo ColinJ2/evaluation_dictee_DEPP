@@ -29,6 +29,9 @@ class ItemPrediction:
     # comparaison écrite après le code est une justification a posteriori, pas un
     # raisonnement — la distinction doit rester visible dans les résultats.
     comparaison_avant_code: bool | None = None
+    # Autre lecture réellement plausible des traits (option report_doubt) ; "" si le
+    # modèle n'hésite pas, None si l'option est inactive.
+    lecture_alternative: str | None = None
 
 
 @dataclass

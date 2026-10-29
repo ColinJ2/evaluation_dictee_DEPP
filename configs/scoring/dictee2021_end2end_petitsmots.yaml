@@ -1,0 +1,57 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  Run scoring dictée 2021 — MÉTHODE C (end-to-end) — prompt « petitsmots »
+# ═══════════════════════════════════════════════════════════════════════════
+#  Identique à dictee2021_end2end_majponct.yaml, plus une consigne :
+#    small_words_rules : petits mots et lettres proches — accent de « à » (visible,
+#                        dans le bon sens), « as »/« sa » pour « a », s/r jugés à
+#                        la forme, s final, un trait d'apostrophe compté une seule
+#                        fois, double erreur point absent + minuscule qui suit.
+#  Mesuré (2021, qwen3-6, base) : l'end-to-end valide 62 % des fautes sur les mots
+#  de 1-2 lettres (44 % en two_stage) ; il y lit le mot attendu. Décision D14.
+#
+#  Nom : dictee<année>_<approche>_<prompt> (convention de `run_names.py`).
+#  Comparer à `majponct` sur le site : page Résultats, mode « deux prompts », 2021.
+#
+#  Lancer : launchers/launch_eval.sh --config configs/scoring/dictee2021_end2end_petitsmots.yaml --prompt petitsmots
+#  Sortie  : data/processed/dictee2021_end2end_petitsmots_<modele>_predictions.jsonl
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: dictee2021_end2end_petitsmots
+seed: 42
+concurrency: 12
+
+approach: end_to_end
+
+model:
+  name: qwen3-6-35b-moe #ou gemma4-26b-moe
+  kind: vlm
+  temperature: 0.0
+  max_tokens: 8192
+  request_logprobs: true
+  max_retries: 2
+  disable_thinking: true
+  structured_output: true
+
+# Pas de bloc model_stage2 en end_to_end (une seule passe).
+
+data:
+  corpus: dictee
+  images_path: s3://projet-production-ecrits-depp/dictee_2021/
+  # Format LONG (dictee;num_item;corrige), reconnu par data/loaders.load_labels.
+  labels_path: s3://projet-production-ecrits-depp/correction_dictee_2021.csv
+  grid_path: configs/grille_dictee_2015.json
+  limit: null
+
+grid:
+  scheme: simplifiee
+
+prompt:
+  method: C
+  n_few_shot: 0
+  enforce_faithful: true
+  read_final_state: true
+  chain_of_thought: false
+  case_rules: true
+  lenient_punctuation: true
+  doubt_word_is_error: true
+  small_words_rules: true

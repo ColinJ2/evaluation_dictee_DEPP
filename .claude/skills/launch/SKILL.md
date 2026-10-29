@@ -42,6 +42,9 @@ passer `--dest-prefix` que pour viser ailleurs.
 | `configs/scoring/dictee2021_two_stage.yaml`     | `dictee2021_two_stage_base`     | `base`     | 6 793  |
 | `configs/scoring/dictee2021_end2end_majponct.yaml`   | `dictee2021_end2end_majponct`   | `majponct` | 6 793  |
 | `configs/scoring/dictee2021_two_stage_majponct.yaml` | `dictee2021_two_stage_majponct` | `majponct` | 6 793  |
+| `configs/scoring/dictee2021_end2end_petitsmots.yaml`   | `dictee2021_end2end_petitsmots`   | `petitsmots` | 6 793  |
+| `configs/scoring/dictee2021_two_stage_petitsmots.yaml` | `dictee2021_two_stage_petitsmots` | `petitsmots` | 6 793  |
+| `configs/scoring/dictee2021_end2end_doute.yaml`        | `dictee2021_end2end_doute`        | `doute`      | 6 793  |
 
 **Nouveau prompt** : copier la config de base de l'année et de l'approche, changer
 `name` (ex. `dictee2021_end2end_monprompt`) et les options du bloc `prompt:`, puis

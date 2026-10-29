@@ -396,6 +396,8 @@ def run_benchmark(
                         # Permet de vérifier après coup que la CoT a bien précédé le
                         # code : une CoT écrite après est décorative (cf. D7).
                         "comparaison_avant_code": (pred.comparaison_avant_code if pred else None),
+                        # Signal de doute (option report_doubt) : "" = pas d'hésitation.
+                        "lecture_alternative": pred.lecture_alternative if pred else None,
                         "raw_transcription": prediction.raw_transcription,
                         "approach": config.approach,
                         "model": model_name,

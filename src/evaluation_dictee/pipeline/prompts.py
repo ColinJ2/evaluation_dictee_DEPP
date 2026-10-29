@@ -225,6 +225,82 @@ _CONSIGNE_PONCTUATION_TRANSCRIPTION = (
 )
 
 
+# Petits mots et lettres proches (prompt `petitsmots`, 23/10/2026). Sur les fautes que
+# l'end-to-end valide, il lit le mot ATTENDU (« S' », « a », « ils » à plus de 80 %) là
+# où le two_stage, qui transcrit sans la référence, lit « Si », « as », « il » : la
+# référence souffle la réponse quand l'image apporte peu d'indices (2-3 lettres, un
+# accent de quelques pixels). D'où l'ordre imposé : lire d'abord, comparer ensuite.
+_CONSIGNE_PETITS_MOTS = (
+    "17 - PETITS MOTS ET LETTRES QUI SE RESSEMBLENT : c'est là que tu te trompes le plus, "
+    "car l'image y donne peu d'indices et le mot attendu te souffle la réponse. Pour ces "
+    "items, regarde l'image AVANT le mot attendu et transcris ce que tu vois, même si "
+    "cela contredit la référence.\n"
+    "   a - « à » (préposition) : code 1 SEULEMENT si un accent est visible au-dessus du "
+    "« a », incliné du haut à gauche vers le bas à droite (accent grave). « a » sans "
+    "accent, accent dans l'autre sens (« á ») ou posé sur une autre lettre : code 9. "
+    "À l'inverse, « à » écrit pour le verbe « a » : code 9 ;\n"
+    "   b - « a » (verbe avoir) : « as », « sa », « à » sont des erreurs (9) ;\n"
+    "   c - « se », « ce », « le », « la », « ne », « et » : vérifie CHAQUE lettre ; « ce » "
+    "pour « se », « ses » pour « se », « les » pour « le » : code 9 ;\n"
+    "   d - lettres proches dans l'écriture d'un enfant, surtout « s » et « r » (aussi "
+    "« n »/« u », « e »/« l », « a »/« o ») : juge à la FORME de la lettre (le « s » se "
+    "referme par une boucle ou un crochet vers le bas, le « r » a une épaule ouverte vers "
+    "la droite), jamais d'après ce qu'exige le mot attendu. Vérifie que le « s » final "
+    "est écrit (« il » pour « ils » : code 9) ;\n"
+    "   e - élision (« S' », « n' », « l' ») : un même trait ne compte qu'UNE fois, soit "
+    "comme l'apostrophe, soit comme une lettre du mot voisin, jamais pour les deux. "
+    "« Si ils », « Sils », « s'ils » (minuscule) : l'item « S' » vaut 9 ;\n"
+    "   f - DOUBLE ERREUR en fin de phrase : un point absent se code 0 sur l'item point, "
+    "ET le mot suivant, s'il commence par une minuscule alors qu'une majuscule est "
+    "attendue, se code 9. Les deux fautes se comptent séparément : aucune n'excuse "
+    "l'autre.\n"
+)
+
+# Étape 1 du two_stage : la lecture doit garder ce que l'étape 2 doit juger.
+_CONSIGNE_PETITS_MOTS_TRANSCRIPTION = (
+    "8 - PETITS MOTS ET LETTRES PROCHES : transcris les accents tels qu'ils sont écrits "
+    "(« a » sans accent reste « a », un accent dans l'autre sens s'écrit « á »). Pour les "
+    "lettres qui se ressemblent (« s »/« r », « n »/« u », « e »/« l »), transcris la "
+    "lettre que tu VOIS d'après sa forme, pas celle que le sens suggère, et ne rajoute "
+    "jamais un « s » final absent. Un même trait ne se transcrit qu'une fois : soit "
+    "apostrophe, soit lettre (« Si ils » et « S'ils » sont deux lectures distinctes).\n"
+)
+
+# Étape 2 du two_stage : mêmes règles, formulées sur le texte.
+_CONSIGNE_PETITS_MOTS_TEXTE = (
+    "8 - PETITS MOTS : « a » ou « á » pour « à », « à », « as » ou « sa » pour « a », "
+    "« ce » ou « ses » pour « se », « il » pour « ils », « Si » ou « s' » pour « S' » "
+    "sont des erreurs (9). DOUBLE ERREUR : un point absent se code 0 ET le mot suivant, "
+    "s'il est en minuscule alors qu'une majuscule est attendue, se code 9.\n"
+)
+
+
+# Signal de doute (prompt `doute`, 23/10/2026). La confiance auto-déclarée ne
+# discriminait rien (AUC 0,53 en 2015, 1,0 sur 91 % des items) : on demande à la place
+# une lecture concurrente, concrète et vérifiable. Tout l'enjeu est de NE PAS la
+# surremplir (a) : un doute de précaution sur chaque item ne signalerait plus rien.
+_CONSIGNE_DOUTE_LECTURE = (
+    "18 - HÉSITATION RÉELLE ENTRE DEUX LECTURES : pour chaque item, remplis "
+    "« lecture_alternative » AVANT le code.\n"
+    '   a - Laisse-le VIDE ("") dans la très grande majorité des cas : dès qu\'une lecture '
+    "s'impose en regardant les traits, il n'y a pas d'hésitation. N'en déclare pas par "
+    "prudence, ni parce que ce que tu lis diffère du mot attendu, ni parce que "
+    "l'écriture est maladroite mais lisible ;\n"
+    "   b - remplis-le SEULEMENT si, en regardant les traits eux-mêmes, deux lectures "
+    "restent vraiment possibles et que tu ne peux pas trancher, par exemple une lettre "
+    "dont la forme est à mi-chemin entre « s » et « r », ou entre « n » et « m ». Écris "
+    "alors l'autre lecture du mot entier (transcription « porte », lecture_alternative "
+    "« poste ») ;\n"
+    "   c - n'écris jamais le mot attendu comme alternative s'il n'est pas réellement "
+    "lisible ainsi sur la copie ;\n"
+    "   d - code : si l'hésitation porte sur la FORME d'une lettre que l'écriture d'un "
+    "enfant rend ambiguë (« s »/« r », « n »/« m », « n »/« u », « e »/« l », "
+    "« a »/« o ») et que l'une des deux lectures est le mot attendu, code 1 : le doute "
+    "profite à l'élève. Cette règle prime sur toute règle de doute précédente. Pour "
+    "toute autre hésitation, applique les règles précédentes.\n"
+)
+
+
 def _ajouter_au_systeme(messages: list[ChatMessageDict], blocs: list[str]) -> list[ChatMessageDict]:
     """Ajoute des consignes à la fin du message system.
 
@@ -421,7 +497,7 @@ PROMPT_TEMPLATES: dict[str, list[ChatMessageDict]] = {
 }
 
 
-def _format_sortie(chain_of_thought: bool, count_items: bool) -> str:
+def _format_sortie(chain_of_thought: bool, count_items: bool, report_doubt: bool = False) -> str:
     """Bloc « format de sortie » du prompt : UN SEUL exemple JSON, cohérent.
 
     Construit un unique dict Python puis le sérialise une fois, plutôt que de coller
@@ -434,11 +510,14 @@ def _format_sortie(chain_of_thought: bool, count_items: bool) -> str:
     Args:
         chain_of_thought: ajoute le champ « comparaison » par item, avant « code ».
         count_items: ajoute le champ « n_items_lus » en tête de réponse.
+        report_doubt: ajoute le champ « lecture_alternative » par item, avant « code ».
 
     Returns:
         Le texte décrivant le JSON attendu.
     """
     item: dict[str, str] = {"item_id": "...", "transcription": "ce que l'élève a écrit"}
+    if report_doubt:
+        item["lecture_alternative"] = ""
     if chain_of_thought:
         item["comparaison"] = 'identique OU description brève de la différence OU "absent"'
     item["code"] = "1"
@@ -456,6 +535,11 @@ def _format_sortie(chain_of_thought: bool, count_items: bool) -> str:
         # Rappelé en clair : l'ordre dans l'exemple JSON seul ne suffit pas toujours à
         # faire respecter l'ordre de génération réel (mesuré).
         consignes.append("« n_items_lus » vient EN PREMIER, avant la liste des items.")
+    if report_doubt:
+        consignes.append(
+            '« lecture_alternative » vient AVANT « code » et reste "" sauf hésitation '
+            "réelle entre deux lectures (règle 18)."
+        )
     if chain_of_thought:
         consignes.append(
             "RESPECTE CET ORDRE DE CLÉS : « comparaison » vient AVANT « code ». Tu dois "
@@ -674,10 +758,14 @@ def build_dictation_prompt(
         blocs.append(_CONSIGNE_PONCTUATION_TOLERANTE)
     if config.doubt_word_is_error:
         blocs.append(_CONSIGNE_DOUTE_MOTS)
+    if config.small_words_rules:
+        blocs.append(_CONSIGNE_PETITS_MOTS)
+    if config.report_doubt:
+        blocs.append(_CONSIGNE_DOUTE_LECTURE)
     consignes_optionnelles = ("\n\n" + "\n\n".join(blocs)) if blocs else ""
 
     consigne_cot = ("\n\n" + _CONSIGNE_COT) if config.chain_of_thought else ""
-    format_sortie = _format_sortie(config.chain_of_thought, config.count_items)
+    format_sortie = _format_sortie(config.chain_of_thought, config.count_items, config.report_doubt)
     bloc_reference = (
         _BLOC_REFERENCE_ITEMS_SEULS
         if config.reference_items_only
@@ -711,6 +799,7 @@ def build_transcription_prompt(
     case_rules: bool = False,
     lenient_punctuation: bool = False,
     doubt_word_is_error: bool = False,
+    small_words_rules: bool = False,
 ) -> list[ChatMessageDict]:
     """Prompt ÉTAPE 1 (HTR) : transcrire l'image sans coder ni voir la référence (non biaisé).
 
@@ -719,6 +808,8 @@ def build_transcription_prompt(
         case_rules: si True, impose de conserver la casse exacte de l'élève.
         lenient_punctuation: si True, impose de transcrire tout signe douteux.
         doubt_word_is_error: si True, un doute sur un mot se transcrit vers la faute.
+        small_words_rules: si True, transcrit accents, lettres proches et apostrophes
+            tels qu'écrits.
 
     Returns:
         Les messages du prompt de transcription compilés.
@@ -736,6 +827,8 @@ def build_transcription_prompt(
         blocs.append(_CONSIGNE_PONCTUATION_TRANSCRIPTION)
     if doubt_word_is_error:
         blocs.append(_CONSIGNE_DOUTE_MOTS_TRANSCRIPTION)
+    if small_words_rules:
+        blocs.append(_CONSIGNE_PETITS_MOTS_TRANSCRIPTION)
     return _ajouter_au_systeme(messages, blocs)
 
 
@@ -747,6 +840,7 @@ def build_text_coding_prompt(
     case_rules: bool = False,
     lenient_punctuation: bool = False,
     doubt_word_is_error: bool = False,
+    small_words_rules: bool = False,
 ) -> list[ChatMessageDict]:
     """Prompt ÉTAPE 2 : coder à partir du texte transcrit (sans image, modèle texte seul).
 
@@ -758,6 +852,8 @@ def build_text_coding_prompt(
         case_rules: si True, ajoute la règle des majuscules.
         lenient_punctuation: si True, ajoute la règle de ponctuation tolérante.
         doubt_word_is_error: si True, une transcription incertaine d'un mot vaut 9.
+        small_words_rules: si True, ajoute les erreurs types des petits mots et la
+            double erreur point absent + minuscule.
 
     Returns:
         Les messages du prompt de codage textuel compilés.
@@ -770,6 +866,8 @@ def build_text_coding_prompt(
         blocs.append(_CONSIGNE_PONCTUATION_TOLERANTE_TEXTE)
     if doubt_word_is_error:
         blocs.append(_CONSIGNE_DOUTE_MOTS_TEXTE)
+    if small_words_rules:
+        blocs.append(_CONSIGNE_PETITS_MOTS_TEXTE)
     messages = _compile_prompt(
         PROMPT_TEXT_CODING,
         fallback=_TEMPLATE_TEXT_CODING,

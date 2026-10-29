@@ -183,6 +183,7 @@ class TwoStageScorer(Scorer):
                     case_rules=self.prompt_config.case_rules,
                     lenient_punctuation=self.prompt_config.lenient_punctuation,
                     doubt_word_is_error=self.prompt_config.doubt_word_is_error,
+                    small_words_rules=self.prompt_config.small_words_rules,
                 ),
                 _image_to_data_url(image),
             ),
@@ -250,6 +251,7 @@ class TwoStageScorer(Scorer):
                 case_rules=self.prompt_config.case_rules,
                 lenient_punctuation=self.prompt_config.lenient_punctuation,
                 doubt_word_is_error=self.prompt_config.doubt_word_is_error,
+                small_words_rules=self.prompt_config.small_words_rules,
             ),
         )
         # chain_of_thought=False : le prompt de l'étape 2 ne demande pas de champ

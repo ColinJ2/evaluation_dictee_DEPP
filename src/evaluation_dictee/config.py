@@ -131,6 +131,19 @@ class PromptConfig(BaseModel):
     # Contrepoids de la sur-correction, biais dominant de l'end-to-end (le modèle
     # lit le mot attendu là où l'élève a fauté). Symétrique de `lenient_punctuation`.
     doubt_word_is_error: bool = False
+    # Petits mots et lettres proches (prompt `petitsmots`, 23/10/2026). Mesuré sur 2021
+    # (qwen3-6, base) : l'end-to-end valide 62 % des fautes sur les mots de 1-2 lettres,
+    # contre 44 % en two_stage et 37 % sur les mots longs ; sur ces fautes il lit le mot
+    # ATTENDU (« S' » 96 %, « a » 96 %) là où le two_stage, sans référence, lit « Si »,
+    # « as », « il ». Règles ciblées : accent de « à », s/r, s final, apostrophe comptée
+    # une seule fois, double erreur point manquant + minuscule.
+    small_words_rules: bool = False
+    # Signal de doute (prompt `doute`, 23/10/2026) : champ « lecture_alternative » par
+    # item, rempli SEULEMENT en cas d'hésitation réelle entre deux lectures des traits
+    # (sinon ""). La confiance auto-déclarée ne discriminait rien (AUC 0,53 en 2015,
+    # 1,0 sur 91 % des items) : une lecture concurrente est plus concrète et vérifiable.
+    # Hésitation de forme sur s/r, n/m… avec le mot attendu parmi les lectures : 1.
+    report_doubt: bool = False
 
 
 class ExperimentConfig(BaseModel):

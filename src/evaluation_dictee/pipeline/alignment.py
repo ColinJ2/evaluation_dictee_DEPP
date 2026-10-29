@@ -25,6 +25,8 @@ class AlignedPrediction:
     # ré-alignée — c'est-à-dire précisément sur les copies décalées, celles que l'on
     # veut inspecter.
     comparaison: str | None = None
+    # Lecture alternative (option report_doubt) : suit son token, comme la comparaison.
+    lecture_alternative: str | None = None
 
 
 def _at(sequence: list[str | None] | None, index: int) -> str | None:
@@ -120,6 +122,7 @@ def realign(
     confidences: list[float | None],
     gap_penalty: float = -0.3,
     comparaisons: list[str | None] | None = None,
+    alternatives: list[str | None] | None = None,
 ) -> list[AlignedPrediction]:
     """Ré-aligne les prédictions sur les mots attendus (Needleman-Wunsch) ; mot absent codé "0".
 
@@ -130,6 +133,7 @@ def realign(
         confidences: scores de confiance correspondant aux codes.
         gap_penalty: pénalité appliquée à un saut (mot non lu ou token en trop).
         comparaisons: comparaisons lues-attendues correspondant aux codes (mode CoT).
+        alternatives: lectures alternatives correspondant aux codes (option report_doubt).
 
     Returns:
         Une prédiction alignée par mot attendu ; "0" si le mot n'a pas été lu, "?"
@@ -161,6 +165,7 @@ def realign(
                 confidence=confidences[j - 1],
                 realigned=(i - 1) != (j - 1),
                 comparaison=_at(comparaisons, j - 1),
+                lecture_alternative=_at(alternatives, j - 1),
             )
             i, j = i - 1, j - 1
         elif score[i][j] == score[i - 1][j] + gap_penalty:
@@ -198,6 +203,7 @@ def realign_anchored(
     transcriptions: list[str | None],
     confidences: list[float | None],
     comparaisons: list[str | None] | None = None,
+    alternatives: list[str | None] | None = None,
 ) -> list[AlignedPrediction]:
     """Alignement par ancrage sur les correspondances exactes uniques, réparti entre les ancres.
 
@@ -209,6 +215,7 @@ def realign_anchored(
         transcriptions: transcriptions correspondant aux codes.
         confidences: scores de confiance correspondant aux codes.
         comparaisons: comparaisons lues-attendues correspondant aux codes (mode CoT).
+        alternatives: lectures alternatives correspondant aux codes (option report_doubt).
 
     Returns:
         Une prédiction alignée par mot attendu ; "0" si le mot n'a pas été lu, "?"
@@ -243,6 +250,7 @@ def realign_anchored(
                 confidences[j1],
                 realigned=(i1 != j1),
                 comparaison=_at(comparaisons, j1),
+                lecture_alternative=_at(alternatives, j1),
             )
         # répartir le segment ouvert (i0, i1) ↔ (j0, j1) positionnellement
         seg_exp = list(range(i0 + 1, i1))
@@ -256,6 +264,7 @@ def realign_anchored(
                     confidences[jm],
                     realigned=(ie != jm),
                     comparaison=_at(comparaisons, jm),
+                    lecture_alternative=_at(alternatives, jm),
                 )
             else:
                 result[ie] = AlignedPrediction("0", None, 0.0, realigned=True)
@@ -271,6 +280,7 @@ def best_realignment(
     transcriptions: list[str | None],
     confidences: list[float | None],
     comparaisons: list[str | None] | None = None,
+    alternatives: list[str | None] | None = None,
 ) -> list[AlignedPrediction]:
     """Applique Needleman-Wunsch et ancrage, garde l'alignement le plus proche des mots attendus.
 
@@ -280,12 +290,22 @@ def best_realignment(
         transcriptions: transcriptions correspondant aux codes.
         confidences: scores de confiance correspondant aux codes.
         comparaisons: comparaisons lues-attendues correspondant aux codes (mode CoT).
+        alternatives: lectures alternatives correspondant aux codes (option report_doubt).
 
     Returns:
         L'alignement (parmi `realign` et `realign_anchored`) de meilleure qualité.
     """
     candidats = [
-        realign(expected_words, codes, transcriptions, confidences, comparaisons=comparaisons),
-        realign_anchored(expected_words, codes, transcriptions, confidences, comparaisons),
+        realign(
+            expected_words,
+            codes,
+            transcriptions,
+            confidences,
+            comparaisons=comparaisons,
+            alternatives=alternatives,
+        ),
+        realign_anchored(
+            expected_words, codes, transcriptions, confidences, comparaisons, alternatives
+        ),
     ]
     return max(candidats, key=lambda a: _alignment_quality(expected_words, a))
